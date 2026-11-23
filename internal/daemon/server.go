@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/777genius/agent-notifications/internal/notification"
 	"github.com/esiqveland/notify"
 	"github.com/godbus/dbus/v5"
 )
@@ -330,33 +331,31 @@ func (s *Server) handleNotification(req *NotifyRequest, strict bool) (*NotifyRes
 	}, nil
 }
 
-// onActionInvoked is called when a notification action is invoked
+// takeLegacyFocus consumes only the current legacy snapshot. A concurrent
+// strict registration or replay must never enter the unauthenticated callback.
+func (s *Server) takeLegacyFocus(id uint32) (FocusHints, bool) {
+	s.focusCtxMu.Lock()
+	defer s.focusCtxMu.Unlock()
+	hints, exists := s.focusCtx[id]
+	if !exists || hints.Strict != nil {
+		return FocusHints{}, false
+	}
+	delete(s.focusCtx, id)
+	return hints, true
+}
+
+// onActionInvoked is called when a notification action is invoked.
 func (s *Server) onActionInvoked(sig *notify.ActionInvokedSignal) {
 	log.Printf("[INFO] ActionInvoked: ID=%d, Action=%s", sig.ID, sig.ActionKey)
-
 	if sig.ActionKey != "default" {
 		return
 	}
-
-	// The notify library does not expose the D-Bus signal sender. Strict
-	// callbacks are handled only by listenStrictActions after owner matching.
-	s.focusCtxMu.RLock()
-	hints, exists := s.focusCtx[sig.ID]
-	s.focusCtxMu.RUnlock()
-	if exists && hints.Strict != nil {
-		return
-	}
-
-	// Consume strict callbacks atomically before any potentially slow OS
-	// operation. Replayed clicks cannot trigger repeated window changes.
-	s.focusCtxMu.RLock()
-	hints, exists = s.focusCtx[sig.ID]
-	s.focusCtxMu.RUnlock()
+	// The notify library does not expose the D-Bus sender. Strict snapshots
+	// remain exclusively owned by the authenticated raw signal consumer.
+	hints, exists := s.takeLegacyFocus(sig.ID)
 	if !exists {
-		log.Printf("[WARN] No focus context for notification %d", sig.ID)
 		return
 	}
-	// Attempt to focus
 	log.Printf("[INFO] Attempting to focus: %s (folder: %s, window_id: %s, window_title: %q, wezterm_pane: %s, zellij: %s/%s mode=%s, sway_ancestors: %d)",
 		hints.TerminalName, hints.FolderName, hints.WindowID, hints.WindowTitle, hints.WezTermPaneID,
 		hints.ZellijSession, hints.ZellijPaneID, hints.ZellijMode, len(hints.AncestorPIDs))
@@ -365,11 +364,6 @@ func (s *Server) onActionInvoked(sig *notify.ActionInvokedSignal) {
 	} else {
 		log.Printf("[INFO] Focus succeeded")
 	}
-
-	// Clean up focus context
-	s.focusCtxMu.Lock()
-	delete(s.focusCtx, sig.ID)
-	s.focusCtxMu.Unlock()
 }
 
 // notificationServiceOwner captures the D-Bus unique sender of the live
@@ -380,6 +374,101 @@ func (s *Server) notificationServiceOwner(ctx context.Context) (string, bool) {
 	return owner, err == nil && len(owner) > 1 && owner[0] == ':'
 }
 
+const strictActionQueueSize = 32
+
+// takeStrictAction authenticates and consumes a snapshot before any slow
+// activation. Close expiry and replay cannot discard an accepted snapshot.
+func (s *Server) takeStrictAction(sig *dbus.Signal) *notification.TerminalTarget {
+	if sig == nil || sig.Name != "org.freedesktop.Notifications.ActionInvoked" ||
+		sig.Path != dbus.ObjectPath("/org/freedesktop/Notifications") || len(sig.Body) != 2 {
+		return nil
+	}
+	id, okID := sig.Body[0].(uint32)
+	action, okAction := sig.Body[1].(string)
+	if !okID || !okAction || action != "default" {
+		return nil
+	}
+	s.focusCtxMu.Lock()
+	defer s.focusCtxMu.Unlock()
+	hints, exists := s.focusCtx[id]
+	if !exists || hints.Strict == nil || hints.StrictOwner == "" || hints.StrictOwner != sig.Sender {
+		return nil
+	}
+	delete(s.focusCtx, id)
+	return hints.Strict
+}
+
+// processStrictActions keeps ingress fast and activation serial. The listener
+// owns this one worker, cancels its active context, and joins it before returning.
+func (s *Server) processStrictActions(signals <-chan *dbus.Signal,
+	activate func(context.Context, *notification.TerminalTarget) error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	pending := make(chan *notification.TerminalTarget, strictActionQueueSize)
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case target := <-pending:
+				select {
+				case <-s.done:
+					return
+				case <-ctx.Done():
+					return
+				default:
+				}
+				// Preserve the per-activation budget and revalidate consent,
+				// installation and terminal identity when this job executes.
+				op, stop := context.WithTimeout(ctx, 4*time.Second)
+				err := activate(op, target)
+				stop()
+				if err != nil {
+					log.Printf("[WARN] Strict terminal focus refused")
+				} else {
+					log.Printf("[INFO] Strict terminal focus succeeded")
+				}
+			}
+		}
+	}()
+	defer func() {
+		cancel()
+		<-workerDone
+	}()
+	for {
+		select {
+		case <-s.done:
+			return
+		default:
+		}
+		select {
+		case <-s.done:
+			return
+		case sig, open := <-signals:
+			if !open {
+				return
+			}
+			target := s.takeStrictAction(sig)
+			if target == nil {
+				continue
+			}
+			select {
+			case <-s.done:
+				return
+			default:
+			}
+			select {
+			case pending <- target:
+			default:
+				// Never block ingress behind OS work. Overflow is consumed
+				// and refused, so it cannot be retried through a replay.
+				log.Printf("[WARN] Strict terminal action queue full")
+			}
+		}
+	}
+}
+
 // listenStrictActions receives the raw signal (including Sender) alongside
 // the legacy library. It never acts on a guessed sender or a reused ID.
 func (s *Server) listenStrictActions(ready chan<- struct{}) {
@@ -388,44 +477,22 @@ func (s *Server) listenStrictActions(ready chan<- struct{}) {
 	s.conn.Signal(signals)
 	defer s.conn.RemoveSignal(signals)
 	close(ready)
-	for {
-		select {
-		case <-s.done:
-			return
-		case sig, open := <-signals:
-			if !open {
-				return
-			}
-			if sig == nil || sig.Name != "org.freedesktop.Notifications.ActionInvoked" ||
-				sig.Path != dbus.ObjectPath("/org/freedesktop/Notifications") ||
-				len(sig.Body) != 2 {
-				continue
-			}
-			id, okID := sig.Body[0].(uint32)
-			action, okAction := sig.Body[1].(string)
-			if !okID || !okAction || action != "default" {
-				continue
-			}
-			s.focusCtxMu.Lock()
-			hints, exists := s.focusCtx[id]
-			if !exists || hints.Strict == nil || hints.StrictOwner == "" || hints.StrictOwner != sig.Sender {
-				s.focusCtxMu.Unlock()
-				continue
-			}
-			delete(s.focusCtx, id)
-			s.focusCtxMu.Unlock()
-			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-			if err := ActivateStrictTerminal(ctx, hints.Strict); err != nil {
-				log.Printf("[WARN] Strict terminal focus refused")
-			} else {
-				log.Printf("[INFO] Strict terminal focus succeeded")
-			}
-			cancel()
-		}
+	s.processStrictActions(signals, ActivateStrictTerminal)
+}
+
+// expireStrictFocus deletes only the snapshot captured by the close event.
+// An old timer must not remove a replacement notification which reused its ID.
+func (s *Server) expireStrictFocus(id uint32, snapshot FocusHints) {
+	s.focusCtxMu.Lock()
+	defer s.focusCtxMu.Unlock()
+	current, exists := s.focusCtx[id]
+	if exists && current.Strict != nil && current.Strict == snapshot.Strict &&
+		current.StrictOwner == snapshot.StrictOwner {
+		delete(s.focusCtx, id)
 	}
 }
 
-// onNotificationClosed is called when a notification is closed
+// onNotificationClosed is called when a notification is closed.
 func (s *Server) onNotificationClosed(sig *notify.NotificationClosedSignal) {
 	s.focusCtxMu.Lock()
 	hints, exists := s.focusCtx[sig.ID]
@@ -435,12 +502,10 @@ func (s *Server) onNotificationClosed(sig *notify.NotificationClosedSignal) {
 		return
 	}
 	s.focusCtxMu.Unlock()
-	// Some servers emit NotificationClosed before ActionInvoked. Give the
-	// authenticated raw callback a brief window, then discard the target.
+	// Some servers emit NotificationClosed before ActionInvoked. Keep the
+	// same brief window; accepted snapshots are already owned by the worker.
 	time.AfterFunc(2*time.Second, func() {
-		s.focusCtxMu.Lock()
-		delete(s.focusCtx, sig.ID)
-		s.focusCtxMu.Unlock()
+		s.expireStrictFocus(sig.ID, hints)
 	})
 }
 

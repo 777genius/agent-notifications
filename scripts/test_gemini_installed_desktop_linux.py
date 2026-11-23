@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Failure-boundary checks with owned exit/observer workers; no GUI required."""
 import importlib.util
+from contextlib import ExitStack, redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -9,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -228,6 +231,104 @@ class ManagedCleanupTests(unittest.TestCase):
             obj.remove()
         self.assertEqual([row["status"] for row in obj.cleanup_attempts], ["passed"] * 3)
         self.assertFalse(obj.registered or obj.install_attempted)
+
+
+class RunFailureTests(unittest.TestCase):
+    def test_run_removes_registered_installation_and_writes_failed_receipt(self):
+        # Native setup and operator processes are mocked, never qualified here.
+        # The real run/install/remove orchestration must still collect an owned
+        # child and write its own failed report after a post-install exception.
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-run-failure-") as temporary:
+            root = Path(temporary).resolve()
+            paths = {name: root / name for name in ("candidate", "gemini", "node", "bash")}
+            for path in paths.values():
+                path.write_bytes(b"TEST unit-only executable identity\n")
+            args = SimpleNamespace(candidate=paths["candidate"], gemini_executable=paths["gemini"],
+                                   node_executable=paths["node"], hook_shell=paths["bash"],
+                                   cli_install_root=root, gemini_version="0.62.0",
+                                   source_sha="a" * 40, report=root / "actual-run-report.json")
+            order, labs, sentinels = [], [], []
+            provider = SimpleNamespace(url="http://127.0.0.1:18791", release=threading.Event(),
+                                       server=object(), thread=SimpleNamespace(is_alive=lambda: False))
+            provider.__enter__ = lambda: provider
+            provider.__exit__ = lambda *unused: order.append("provider_closed")
+
+            def desktop_setup(lab, terminal_lifetime):
+                self.assertEqual(terminal_lifetime, 600)
+                labs.append(lab)
+                lab.env.update(DISPLAY=":TEST", DBUS_SESSION_BUS_ADDRESS="TEST-unit-bus",
+                               PULSE_SERVER="TEST-unit-audio")
+                names = ("Xvfb", "openbox", "dunst", "xterm", "xdotool", "dbus-daemon", "ffmpeg")
+                lab.report["tools"] = {name: {"unit_fixture": True} for name in names}
+                lab.report["dunst_click_bindings"] = {"1": "do_action", "2": "close_current"}
+                sentinel = D.N.Lab.start(lab, [sys.executable, "-I", "-c",
+                                              "import time; time.sleep(60)"])
+                sentinels.append(sentinel)
+                self.addCleanup(lab.close)
+                return {}, None, ["1", "2"]
+
+            def setup(*arguments):
+                order.append("setup_" + arguments[-1])
+
+            def inspect(*arguments):
+                order.append("inspect_" + str(arguments[-1]))
+
+            def change(installation, enable):
+                self.assertTrue(installation.registered)
+                order.append("policy_" + str(enable))
+                return {"before": 7, "after": 8, "enabled": enable}
+
+            def fail_after_install(lab, argv):
+                self.assertEqual(argv, [paths["candidate"], "--daemon"])
+                self.assertEqual(order, ["setup_install", "inspect_True", "policy_True"])
+                order.append("post_install_failure")
+                raise D.Failed("TEST_post_install_failure")
+
+            snapshot = {"settings_sha256": "TEST-settings",
+                        "ledger": {"Consumers": {D.G5.CONSUMER: {"Commands": [str(paths["candidate"])]}}}}
+            settings = {"hooks": {event: [{"hooks": [{"name": name}]}]
+                                   for event, name in D.G5.OWN.items()}}
+            patches = (
+                patch.object(D, "source_identity", return_value={}),
+                patch.object(D.G0, "cli_identity", return_value={"version": "0.62.0"}),
+                patch.object(D, "fixture_settings"),
+                patch.object(D.ctypes, "CDLL", return_value=SimpleNamespace(prctl=lambda *unused: 0)),
+                patch.object(D.N, "linux_desktop", side_effect=desktop_setup),
+                patch.object(D.IsolatedWindowOwner, "probe"),
+                patch.object(D, "HeldProvider", return_value=provider),
+                patch.object(D, "run_command", return_value=(0, b"0.62.0\n", b"")),
+                patch.object(D, "json_command", side_effect=lambda argv, cwd, env, **options:
+                             {"path": env["AGENT_NOTIFICATIONS_CONFIG"]}),
+                patch.object(D.G5, "setup", side_effect=setup),
+                patch.object(D.G5, "snapshot", return_value=(snapshot, settings)),
+                patch.object(D.G5, "inspect", side_effect=inspect),
+                patch.object(D.Installation, "change", new=change),
+                patch.object(D.GeminiDesktopLab, "start", new=fail_after_install),
+            )
+            with ExitStack() as stack, redirect_stdout(io.StringIO()):
+                for replacement in patches:
+                    stack.enter_context(replacement)
+                self.assertEqual(D.run(args), 1)
+
+            report = json.loads(args.report.read_text())
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["failure"], "TEST_post_install_failure")
+            self.assertFalse(report["native_product_observations_passed"])
+            self.assertEqual(report["managed_cleanup"], "disabled_and_removed")
+            self.assertEqual(report["managed_cleanup_attempts"], [
+                {"stage": "disable", "status": "passed"},
+                {"stage": "remove", "status": "passed"},
+                {"stage": "inspect_absent", "status": "passed"}])
+            self.assertEqual(order, ["setup_install", "inspect_True", "policy_True", "post_install_failure",
+                                     "policy_False", "setup_remove", "inspect_False", "provider_closed"])
+            self.assertTrue(provider.release.is_set())
+            self.assertTrue(report["provider_thread_collected"])
+            self.assertTrue(report["owned_direct_children_collected"])
+            self.assertTrue(report["private_fixture_removed"])
+            self.assertNotIn("cleanup_failures", report)
+            self.assertEqual(len(sentinels), 1)
+            self.assertIsNotNone(sentinels[0].poll())
+            self.assertFalse(labs[0].root.parent.exists())
 
 
 class ExitObserverTests(unittest.TestCase):
@@ -618,6 +719,29 @@ class BannerOwnershipTests(unittest.TestCase):
                         lab.start(["/usr/bin/dunst", "-config", config])
                 self.assertEqual(config.read_text(), content)
                 start.assert_not_called()
+
+    def test_commented_or_other_section_bindings_cannot_satisfy_global_contract(self):
+        fixtures = (
+            "[global]\n# mouse_left_click = do_action\nmouse_left_click = context\n"
+            "mouse_middle_click = close_current\n",
+            "[global]\nmouse_left_click = do_action\n# mouse_middle_click = close_current\n"
+            "mouse_middle_click = do_action\n",
+            "[global]\nmouse_left_click = context\n[rule]\n"
+            "mouse_left_click = do_action\nmouse_middle_click = close_current\n",
+            "[DEFAULT]\nmouse_left_click = do_action\nmouse_middle_click = close_current\n[global]\n",
+            "[global]\nmouse_left_click: do_action\nmouse_middle_click = close_current\n",
+        )
+        for content in fixtures:
+            with self.subTest(content=content), self.assertRaisesRegex(
+                    D.Failed, "owned_dunst_binding_mismatch"):
+                D.dunst_click_bindings(content)
+
+    def test_duplicate_active_global_bindings_are_rejected(self):
+        for duplicate in ("mouse_left_click = context\n", "mouse_middle_click = do_action\n"):
+            content = "[global]\nmouse_left_click = do_action\nmouse_middle_click = close_current\n"
+            with self.subTest(duplicate=duplicate), self.assertRaisesRegex(
+                    D.Failed, "owned_dunst_binding_mismatch"):
+                D.dunst_click_bindings(content + duplicate)
 
 
 if __name__ == "__main__":

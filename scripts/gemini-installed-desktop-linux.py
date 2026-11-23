@@ -7,6 +7,7 @@ The daemon is explicitly started: this does not qualify daemon autostart, Google
 authentication, HID input, other events, other agents or other desktop platforms.
 """
 import argparse
+import configparser
 import ctypes
 import hashlib
 import importlib.util
@@ -699,6 +700,22 @@ class IsolatedWindowOwner:
         return self.query(int(window))["pid"]
 
 
+def dunst_click_bindings(content):
+    # This validates our generated fixture, not arbitrary user configuration.
+    # Comments, another section or inherited defaults cannot prove a binding.
+    config = configparser.ConfigParser(delimiters=("=",), interpolation=None, strict=True)
+    config.optionxform = str
+    try:
+        config.read_string(content)
+    except configparser.Error:
+        raise Failed("owned_dunst_binding_mismatch")
+    require(not config.defaults() and config.has_section("global")
+            and config.get("global", "mouse_left_click", fallback=None) == "do_action"
+            and config.get("global", "mouse_middle_click", fallback=None) == "close_current",
+            "owned_dunst_binding_mismatch")
+    return {"1": "do_action", "2": "close_current"}
+
+
 class GeminiDesktopLab(N.Lab):
     """Verify the owned Dunst's ordinary action/dismissal bindings at startup."""
     def start(self, argv):
@@ -706,11 +723,7 @@ class GeminiDesktopLab(N.Lab):
             config = self.root / "dunstrc"
             require(len(argv) == 3 and argv[1] == "-config" and Path(argv[2]) == config
                     and config.is_file() and not config.is_symlink(), "owned_dunst_config_required")
-            content = config.read_text()
-            require(content.count("mouse_left_click = do_action\n") == 1
-                    and content.count("mouse_middle_click = close_current\n") == 1,
-                    "owned_dunst_binding_mismatch")
-            self.report["dunst_click_bindings"] = {"1": "do_action", "2": "close_current"}
+            self.report["dunst_click_bindings"] = dunst_click_bindings(config.read_text())
         return super().start(argv)
 
 
