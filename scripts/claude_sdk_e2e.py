@@ -501,6 +501,26 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
             require(proven, "sh trace did not prove actual staged binary argv")
         return actual
 
+    def generic_permission_context(self):
+        """Real installed hook must project only a verified recent tool identity."""
+        session = "TEST-permission-context"
+        transcript = self.project / (session + ".jsonl")
+        record = {"type": "assistant", "sessionId": session,
+                  "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                  "message": {"role": "assistant", "content": [{
+                      "type": "tool_use", "id": "call-1", "name": "Bash",
+                      "input": {"command": "echo private-secret"} }]}}
+        transcript.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        body = "Claude needs your permission (recent tool: Bash)"
+        got = self.emit("Notification", session, "permission_request", body,
+                        fields={"notification_type": "permission_prompt",
+                                "message": "Claude needs your permission",
+                                "transcript_path": str(transcript)})
+        require("private-secret" not in json.dumps(got),
+                "raw transcript command escaped into notification")
+        return {"notification": "permission_request", "safe_recent_tool": "Bash",
+                "command_rendered": False, "provider_required": False}
+
     def interactive(self, tool, status, message, session):
         """Verify tool notification delivery and the persisted interactive state."""
         self.emit("PreToolUse", session, status, message, fields={"tool_name": tool})
@@ -728,6 +748,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
             self.check("Notification_permission_prompt_permission_request", lambda: self.emit(
                 "Notification", "TEST-permission", "permission_request", "Fixture permission needed",
                 fields={"notification_type": "permission_prompt", "message": "Fixture permission needed"}))
+            self.check("Notification_generic_recent_tool_from_transcript", self.generic_permission_context)
             self.check("Stop_message_installed_and_actual_wrapper_argv", lambda: self.emit(
                 "Stop", "TEST-stop", "task_complete", "Stop fixture complete.", trace=True,
                 fields={"last_assistant_message": "Stop fixture complete."}))
