@@ -42,8 +42,8 @@ type Server struct {
 	// Notification IDs belong to one D-Bus service owner, not to the daemon.
 	// Serializing replaceable sends prevents concurrent sessions from
 	// restoring stale IDs across a service restart.
-	replaceSendMu sync.Mutex
-	replaceOwner string
+	replaceSendMu      sync.Mutex
+	replaceOwner       string
 	replaceOwnerLookup func(context.Context) (string, bool)
 
 	// Idle timeout for auto-shutdown
