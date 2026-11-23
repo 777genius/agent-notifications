@@ -561,13 +561,25 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
                                       "content": "private-secret"}]),
                               entry(completed, now, "assistant", [tool("new", "Edit")])],
                   generic, generic + " (recent tool: Edit)")
+        wrong_role = "TEST-permission-wrong-result-role"
+        emit_case(wrong_role, [
+            entry(wrong_role, now, "assistant", [tool("a", "Bash"), tool("b", "Edit")]),
+            entry(wrong_role, now, "assistant",
+                  [{"type": "tool_result", "tool_use_id": "a"}])],
+                  generic, generic)
+        misplaced_use = "TEST-permission-wrong-use-role"
+        emit_case(misplaced_use, [
+            entry(misplaced_use, now, "assistant", [tool("a", "Bash")]),
+            entry(misplaced_use, now, "user", [tool("b", "Edit")])],
+                  generic, generic)
         specific = "TEST-permission-host-specific"
         host = "Claude requests permission to use WebFetch"
         emit_case(specific, [entry(specific, now, "assistant", [tool("a", "Bash")])],
                   host, host)
-        return {"installed_hook_webhooks": 4, "parallel_fallback": True,
+        return {"installed_hook_webhooks": 6, "parallel_fallback": True,
                 "stale_parallel_fallback": True, "completed_call_correlation": True,
-                "host_message_authoritative": True, "raw_commands_rendered": False}
+                "misplaced_role_fallback": True, "host_message_authoritative": True,
+                "raw_commands_rendered": False}
 
     def interactive_permission_pair(self):
         """A question or plan already notified must not emit the generic echo."""
