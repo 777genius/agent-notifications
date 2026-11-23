@@ -109,11 +109,13 @@ func claudePermissionRecentTool(session SessionContext) string {
 		if json.Unmarshal(content, &blocks) != nil {
 			return ""
 		}
-		// Incomplete correlation records can hide an additional prompt or a
-		// result. Never silently skip missing IDs and then claim uniqueness.
+		// An invalid correlation ID or a tool block in the wrong message
+		// role cannot prove which calls remain pending. In Claude JSONL,
+		// tool_use belongs to assistant and tool_result belongs to user.
+		// Fail closed: a misplaced result could erase a real competing call.
 		for _, item := range blocks {
-			if (item.Type == "tool_use" && item.ID == "") ||
-				(item.Type == "tool_result" && item.ToolUseID == "") {
+			if (item.Type == "tool_use" && (item.ID == "" || record.Type != "assistant")) ||
+				(item.Type == "tool_result" && (item.ToolUseID == "" || record.Type != "user")) {
 				return ""
 			}
 		}
