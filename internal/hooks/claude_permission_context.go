@@ -40,12 +40,13 @@ func claudePermissionRecentTool(session SessionContext) string {
 	if err != nil || !stat.Mode().IsRegular() || !os.SameFile(before, stat) || stat.Size() != before.Size() {
 		return ""
 	}
-	length := stat.Size()
-	if length > claudePermissionTailBytes {
-		length = claudePermissionTailBytes
+	// A truncated transcript can hide a still-unresolved older call. Do
+	// not claim uniqueness unless the entire session is within the read cap.
+	if stat.Size() > claudePermissionTailBytes {
+		return ""
 	}
-	start := stat.Size() - length
-	tail := make([]byte, int(length))
+	start := int64(0)
+	tail := make([]byte, int(stat.Size()))
 	n, err := file.ReadAt(tail, start)
 	if (err != nil && err != io.EOF) || n != len(tail) {
 		return ""
@@ -70,7 +71,11 @@ func claudePermissionRecentTool(session SessionContext) string {
 		return ""
 	}
 	completed := make(map[string]bool)
-	pending := make(map[string]string)
+	type pendingTool struct {
+		name string
+		at   time.Time
+	}
+	pending := make(map[string]pendingTool)
 	now := time.Now()
 	lines := bytes.Split(tail, []byte{'\n'})
 	for i := len(lines)-1; i >= 0; i-- {
@@ -126,23 +131,26 @@ func claudePermissionRecentTool(session SessionContext) string {
 			continue
 		}
 		at, err := time.Parse(time.RFC3339Nano, record.Timestamp)
-		if err != nil || at.After(now.Add(5*time.Second)) || now.Sub(at) > claudePermissionMaxAge {
-			continue
+		if err != nil || at.After(now.Add(5*time.Second)) {
+			at = time.Time{}
 		}
 		for _, item := range blocks {
 			if item.Type != "tool_use" || item.ID == "" || completed[item.ID] {
 				continue
 			}
-			// Unknown tools also occupy an in-flight slot. Omitting them
-			// would falsely make a concurrent known tool look unique.
-			pending[item.ID] = safeClaudeToolLabel(item.Name)
+			// All unresolved tool calls count, even stale or unknown ones. An
+			// older pending Bash must not make a recent Edit look unique.
+			pending[item.ID] = pendingTool{name: safeClaudeToolLabel(item.Name), at: at}
 		}
 	}
 	if len(pending) != 1 {
 		return ""
 	}
-	for _, name := range pending {
-		return name
+	for _, candidate := range pending {
+		if candidate.at.IsZero() || now.Sub(candidate.at) > claudePermissionMaxAge {
+			return ""
+		}
+		return candidate.name
 	}
 	return ""
 }
