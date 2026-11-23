@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"runtime"
 	"path/filepath"
 	"strings"
 	"time"
@@ -121,6 +122,11 @@ func gitDiscoveryEnv() []string {
 	filtered := make([]string, 0, len(env))
 	for _, entry := range env {
 		key, _, _ := strings.Cut(entry, "=")
+		// Windows environment variables are case-insensitive, so Git_Dir
+		// is as capable of redirecting discovery as GIT_DIR.
+		if runtime.GOOS == "windows" {
+			key = strings.ToUpper(key)
+		}
 		switch key {
 		case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES":
 			continue
