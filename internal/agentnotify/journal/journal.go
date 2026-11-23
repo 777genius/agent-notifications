@@ -306,37 +306,6 @@ func Open(ctx context.Context, o Options) (*Store, error) {
 	}
 	return s, nil
 }
-
-// InspectReadOnly validates an existing journal's exact canonical on-disk
-// contract without taking its lock or creating any files. The writer publishes
-// whole snapshots by atomic rename; reading a complete old or new snapshot is
-// safe for admission-only inspection. Actual mutations still reopen under the
-// journal lock and the caller's normal generation/ownership fences.
-func InspectReadOnly(ctx context.Context, o Options) (string, error) {
-	if ctx == nil {
-		return "", ErrInvalid
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	s, err := newStore(o)
-	if err != nil {
-		return "", err
-	}
-	dir, err := openRoot(s.root)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = dir.Close() }()
-	d, err := s.read(dir)
-	if err != nil {
-		return "", err
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	return d.Namespace, nil
-}
 func (s *Store) Lookup(ctx context.Context, k Key, digest Digest) (out Result, err error) {
 	if !k.valid() {
 		return out, ErrInvalid
