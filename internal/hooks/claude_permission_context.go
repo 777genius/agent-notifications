@@ -37,7 +37,7 @@ func claudePermissionRecentTool(session SessionContext) string {
 	}
 	defer func() { _ = file.Close() }()
 	stat, err := file.Stat()
-	if err != nil || !stat.Mode().IsRegular() || stat.Size() != before.Size() {
+	if err != nil || !stat.Mode().IsRegular() || !os.SameFile(before, stat) || stat.Size() != before.Size() {
 		return ""
 	}
 	length := stat.Size()
