@@ -68,12 +68,47 @@ func inspectInitializedForEnable(o Options, s installruntime.PolicySnapshot) err
 		return fail("initialization_recovery_required", fmt.Errorf("invalid ownership token: %w", err))
 	}
 
-	if owner.Phase != "ready" {
-		// An interrupted journal might be resumable. Only Apply may finish
-		// it under setup lock and policy generation fencing; this read-only
-		// preflight never changes owner markers or initializes journals.
-		return fail("initialization_interrupted",
-			fmt.Errorf("setup ownership is not ready; inspect the interrupted setup before enabling"))
+	return inspectProvisionContinuation(o, s, owner)
+}
+
+// A complete interrupted journal is resumable by Apply. Preflight must not
+// block a legitimate retry after journal_initialized or ownership_ready, nor
+// claim readiness for an abandoned pre-initialization stage (#585).
+func inspectProvisionContinuation(o Options, s installruntime.PolicySnapshot, owner ownership) error {
+	root := o.ControlRoot
+	state := filepath.Join(root, "state")
+	stage := filepath.Join(root, stageName)
+	stateInfo, stateErr := os.Lstat(state)
+	stageInfo, stageErr := os.Lstat(stage)
+	if stateErr != nil && !os.IsNotExist(stateErr) {
+		return fail("initialization_recovery_required", fmt.Errorf("cannot inspect owned state: %w", stateErr))
 	}
-	return checkProvisioned(o, s)
+	if stageErr != nil && !os.IsNotExist(stageErr) {
+		return fail("initialization_recovery_required", fmt.Errorf("cannot inspect provisioning stage: %w", stageErr))
+	}
+	if stateErr == nil {
+		if owner.Phase != "ready" || stageErr == nil || !stateInfo.IsDir() {
+			return fail("initialization_recovery_required",
+				fmt.Errorf("unexpected retained or overlapping setup stage; preserve state"))
+		}
+		return checkProvisioned(o, s)
+	}
+	if stageErr != nil || !stageInfo.IsDir() {
+		return fail("initialization_recovery_required",
+			fmt.Errorf("expected owned setup state is absent; preserve ownership evidence"))
+	}
+	// Only a fully staged journal may progress under Apply's exclusive locks,
+	// identity checks and namespace comparison. No journal.Open/Initialize in
+	// the read-only path (they might create files).
+	for _, name := range []string{
+		"journal/namespace", "journal/journal.json", "journal/lock",
+		"native-spool/.spool.lock",
+	} {
+		info, err := os.Lstat(filepath.Join(stage, filepath.FromSlash(name)))
+		if err != nil || !info.Mode().IsRegular() {
+			return fail("initialization_recovery_required",
+				fmt.Errorf("interrupted setup journal is incomplete or unsafe; preserve private state"))
+		}
+	}
+	return nil
 }
