@@ -267,5 +267,51 @@ class HeavyNativeDraftTierPolicy(unittest.TestCase):
                             self.assertTrue(accepted, (kind, event, draft, same_repo))
 
 
+
+
+class RemainingNativeDraftTierPolicy(unittest.TestCase):
+    """Keep native PR draft cost down without weakening Ready/manual evidence."""
+
+    def test_pinned_native_suites_run_ready_and_preserve_qualification_inputs(self):
+        import re
+        root = Path(__file__).resolve().parents[1] / '.github' / 'workflows'
+        cases = {
+            'pi-native-preflight.yml': ['prerequisites', 'windows-prerequisites'],
+            'navigation-linux-portal-owner-fence.yml': ['owner-fence'],
+            'navigation-linux-vendor-manifest.yml': ['manifest'],
+            'cursor-windows-shell.yml': ['native-shell'],
+        }
+        normal = "if: github.event_name != 'pull_request' || github.event.pull_request.draft != true"
+        trusted = ("if: github.event_name != 'pull_request' || "
+                   "(github.event.pull_request.head.repo.full_name == github.repository && "
+                   "github.event.pull_request.draft != true)")
+        for filename, expected_jobs in cases.items():
+            with self.subTest(workflow=filename):
+                source = (root / filename).read_text()
+                header, separator, jobs = source.partition('\njobs:\n')
+                self.assertTrue(separator, filename + ': jobs missing')
+                self.assertEqual(header.count('    types: [opened, synchronize, reopened, ready_for_review]'), 1)
+                self.assertIn('  pull_request:', header)
+                self.assertIn('  workflow_dispatch:', header)
+                self.assertEqual('  push:' in header, filename == 'cursor-windows-shell.yml')
+                actual = re.findall(r'(?m)^  ([a-z][\w-]+):\n', jobs)
+                self.assertEqual(sorted(actual), sorted(expected_jobs), filename + ': job closure changed')
+                blocks = dict(re.findall(r'(?ms)^  ([a-z][\w-]+):\n(.*?)(?=^  [a-z][\w-]+:\n|\Z)', jobs))
+                for job in expected_jobs:
+                    self.assertIn(job, blocks)
+                    body = blocks[job]
+                    self.assertIn('    timeout-minutes:', body)
+                    self.assertNotIn('continue-on-error: true', body)
+                    if job == 'windows-prerequisites':
+                        self.assertIn("if: github.event_name == 'workflow_dispatch' &&", body)
+                    else:
+                        self.assertIn('    ' + (trusted if filename == 'cursor-windows-shell.yml' else normal), body)
+                if filename == 'pi-native-preflight.yml':
+                    self.assertIn('platform: linux', source)
+                    self.assertIn('platform: darwin', source)
+                if filename == 'cursor-windows-shell.yml':
+                    self.assertIn('branches: [feat/cursor-windows-cli]', header)
+                    self.assertIn('github.event.pull_request.head.repo.full_name == github.repository', jobs)
+
 if __name__ == '__main__':
     unittest.main()
