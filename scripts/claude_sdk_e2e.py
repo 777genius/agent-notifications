@@ -521,6 +521,54 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         return {"notification": "permission_request", "safe_recent_tool": "Bash",
                 "command_rendered": False, "provider_required": False}
 
+    def permission_transcript_ambiguity(self):
+        """Qualify generic fallback on the real installed hook, not a mock."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+
+        def tool(id_, name):
+            return {"type": "tool_use", "id": id_, "name": name,
+                    "input": {"command": "echo private-secret"}}
+
+        def entry(session, timestamp, role, blocks):
+            return {"type": role, "sessionId": session, "timestamp": timestamp,
+                    "message": {"role": role, "content": blocks}}
+
+        def emit_case(session, records, host, expected):
+            transcript = self.project / (session + ".jsonl")
+            transcript.write_text("".join(json.dumps(row) + "\n" for row in records),
+                                  encoding="utf-8")
+            got = self.emit("Notification", session, "permission_request", expected,
+                            fields={"notification_type": "permission_prompt",
+                                    "message": host, "transcript_path": str(transcript)})
+            require("private-secret" not in json.dumps(got),
+                    "transcript arguments escaped into real webhook")
+            return {"session": session, "body": got["raw_body"]}
+
+        generic = "Claude needs your permission"
+        parallel = "TEST-permission-parallel"
+        emit_case(parallel, [entry(parallel, now, "assistant",
+                                   [tool("a", "Bash"), tool("b", "Edit")])],
+                  generic, generic)
+        stale = "TEST-permission-stale-parallel"
+        emit_case(stale, [entry(stale, old, "assistant", [tool("old", "Bash")]),
+                          entry(stale, now, "assistant", [tool("new", "Edit")])],
+                  generic, generic)
+        completed = "TEST-permission-completed"
+        emit_case(completed, [entry(completed, old, "assistant", [tool("old", "Bash")]),
+                              entry(completed, now, "user",
+                                    [{"type": "tool_result", "tool_use_id": "old",
+                                      "content": "private-secret"}]),
+                              entry(completed, now, "assistant", [tool("new", "Edit")])],
+                  generic, generic + " (recent tool: Edit)")
+        specific = "TEST-permission-host-specific"
+        host = "Claude requests permission to use WebFetch"
+        emit_case(specific, [entry(specific, now, "assistant", [tool("a", "Bash")])],
+                  host, host)
+        return {"installed_hook_webhooks": 4, "parallel_fallback": True,
+                "stale_parallel_fallback": True, "completed_call_correlation": True,
+                "host_message_authoritative": True, "raw_commands_rendered": False}
+
     def interactive(self, tool, status, message, session):
         """Verify tool notification delivery and the persisted interactive state."""
         self.emit("PreToolUse", session, status, message, fields={"tool_name": tool})
@@ -749,6 +797,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
                 "Notification", "TEST-permission", "permission_request", "Fixture permission needed",
                 fields={"notification_type": "permission_prompt", "message": "Fixture permission needed"}))
             self.check("Notification_generic_recent_tool_from_transcript", self.generic_permission_context)
+            self.check("Notification_generic_transcript_ambiguity_e2e", self.permission_transcript_ambiguity)
             self.check("Stop_message_installed_and_actual_wrapper_argv", lambda: self.emit(
                 "Stop", "TEST-stop", "task_complete", "Stop fixture complete.", trace=True,
                 fields={"last_assistant_message": "Stop fixture complete."}))
