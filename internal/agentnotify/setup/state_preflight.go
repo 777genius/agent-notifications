@@ -3,8 +3,8 @@
 package setup
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
