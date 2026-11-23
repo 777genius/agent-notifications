@@ -112,4 +112,10 @@ func TestGitMetadataContextIgnoresInheritedRepoSelection(t *testing.T) {
 	if got := GetGitBranchContext(ctx, wanted); got != "wanted-branch" {
 		t.Fatalf("branch = %q, want wanted-branch", got)
 	}
+	if got := GetGitBranch(wanted); got != "wanted-branch" {
+		t.Fatalf("legacy branch = %q, want wanted-branch", got)
+	}
+	if got := GetGitMetadata(wanted); got.Branch != "wanted-branch" || got.CommitHash == "" {
+		t.Fatalf("legacy metadata from wrong repo: %+v", got)
+	}
 }
