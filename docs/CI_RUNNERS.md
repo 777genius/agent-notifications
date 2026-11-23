@@ -90,10 +90,10 @@ These contracts require new qualification before changing provider:
 
 ## Cursor source qualification kernels
 
-The stock Ubuntu 24.04.5 runner moved from `6.17.0-1022-azure` to
-`7.0.0-1017-azure`. The source namespace policy accepts these two exact kernels
-only, with the existing Linux amd64, Ubuntu release, ext4 ancestry and original
-profile token requirements. Unknown kernels continue to refuse.
+The stock Ubuntu 24.04.5 pool has supplied `6.17.0-1022-azure`,
+`7.0.0-1017-azure` and `7.0.0-1014-aws`. Source qualification is specific to each
+exact kernel and retains the Linux amd64, Ubuntu release, ext4 ancestry and
+original profile token requirements. Unknown kernels continue to refuse.
 
 The historical P1 receipt remains evidence for the original kernel only. The
 kernel 7 qualification has its own `source-ci-pr497` identity. Before merging
@@ -101,6 +101,31 @@ kernel 7 qualification has its own `source-ci-pr497` identity. Before merging
 Ubuntu job must pass the real directory identity/swap, Cursor, materializer,
 caller and recovery contracts on that kernel. `NOT_RUN` remains a CI failure;
 this source qualification grants no installed native E or consent.
+
+### AWS kernel qualification candidate
+
+The proposed `7.0.0-1014-aws` entry has its own
+`source-ci-aws-20261123` identity. It cannot inherit either Azure receipt.
+The kernel policy and identity mapping admit only this exact new string;
+neighboring versions, another provider suffix and extra characters remain
+refused. An unknown kernel also receives no source evidence identity.
+
+Acceptance is pending a complete `cursor-physical` result on an actual
+Ubuntu 24.04.5/Linux amd64 host with this AWS kernel: directory identity/swap,
+original-token revalidation, selected projection/acknowledgement/data,
+positive materializer, caller handoff and matching recovery, and package cleanup.
+The existing job commands, positive markers, `NOT_RUN` failures, ext4 ancestry
+checks and installed-native/consent boundaries are unchanged. A passing Azure
+run cannot qualify the AWS entry.
+
+Both attempts of the unchanged source `06734f7` reached the new AWS tuple and
+refused the positive materializer at its kernel guard
+([first attempt](https://github.com/777genius/agent-notifications/actions/runs/45082159894/job/137436146752),
+[bounded retry](https://github.com/777genius/agent-notifications/actions/runs/45082159894/job/137472781097)).
+Those partial results do not qualify the missing materializer/caller contracts
+or establish ext4 for every ancestor. The candidate must record its own complete
+AWS source-bound evidence before merge, as the earlier kernel qualification did
+in [PR 497](https://github.com/777genius/agent-notifications/pull/497).
 
 ## Concurrency and rollback
 
