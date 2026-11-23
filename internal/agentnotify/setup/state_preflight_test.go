@@ -126,6 +126,41 @@ func TestInspectChecksInitializationAdmissionBeforeEnable(t *testing.T) {
 			}
 		})
 	}
+	for _, kind := range []string{"stage-mode", "journal-mode", "spool-mode", "spool-lock-mode"} {
+		t.Run("private staged state "+kind+" must match enable", func(t *testing.T) {
+			o, r := fixture(t)
+			o.Fault = func(phase string) error {
+				if phase == "journal_initialized" {
+					return fmt.Errorf("injected interrupt")
+				}
+				return nil
+			}
+			result, err := Apply(contextFor(t), o, r)
+			wantReason(t, err, "initialization_interrupted")
+			o.Fault = nil
+			r.ExpectedGeneration = result.Generation
+			stage := filepath.Join(o.ControlRoot, stageName)
+			changed := stage
+			mode := os.FileMode(0755)
+			switch kind {
+			case "journal-mode":
+				changed = filepath.Join(stage, "journal")
+			case "spool-mode":
+				changed = filepath.Join(stage, "native-spool")
+			case "spool-lock-mode":
+				changed = filepath.Join(stage, "native-spool", ".spool.lock")
+				mode = 0644
+			}
+			if err := os.Chmod(changed, mode); err != nil {
+				t.Fatal(err)
+			}
+			before := tree(t, o.ControlRoot)
+			wantReason(t, Inspect(contextFor(t), o, r, []byte(globalConfig)), "initialization_recovery_required")
+			if !reflect.DeepEqual(before, tree(t, o.ControlRoot)) {
+				t.Fatal("preflight silently fixed unsafe staged permissions")
+			}
+		})
+	}
 	t.Run("replaced interrupted stage cannot borrow durable owner identity", func(t *testing.T) {
 		o, r := fixture(t)
 		o.Fault = func(step string) error {
