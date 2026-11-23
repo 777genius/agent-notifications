@@ -267,8 +267,6 @@ class HeavyNativeDraftTierPolicy(unittest.TestCase):
                             self.assertTrue(accepted, (kind, event, draft, same_repo))
 
 
-
-
 class RemainingNativeDraftTierPolicy(unittest.TestCase):
     """Keep native PR draft cost down without weakening Ready/manual evidence."""
 
@@ -312,6 +310,8 @@ class RemainingNativeDraftTierPolicy(unittest.TestCase):
                 if filename == 'cursor-windows-shell.yml':
                     self.assertIn('branches: [feat/cursor-windows-cli]', header)
                     self.assertIn('github.event.pull_request.head.repo.full_name == github.repository', jobs)
+
+
 
 if __name__ == '__main__':
     unittest.main()
