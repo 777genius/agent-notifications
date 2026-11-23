@@ -69,7 +69,13 @@ func inspectInitializedForEnable(ctx context.Context, o Options, s installruntim
 	if _, err := hex.DecodeString(owner.Token); err != nil {
 		return fail("initialization_recovery_required", fmt.Errorf("invalid ownership token: %w", err))
 	}
-
+	// An enabled policy cannot borrow an unfinished journal owner. Apply's
+	// recordOwner also rejects this combination, so preflight must not mark
+	// such an installation ready (even if staged files look complete).
+	if owner.Phase == "started" && (s.Policy.Enabled || s.Installation.Ledger.Enabled) {
+		return fail("initialization_recovery_required",
+			fmt.Errorf("enabled installation has an unfinished setup ownership marker"))
+	}
 	return inspectProvisionContinuation(ctx, o, s, owner)
 }
 
