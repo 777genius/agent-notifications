@@ -24,7 +24,7 @@ Desktop alerts are silent by default. Since **v1.50.0**, they can request the
 `sound` setting is enabled. This is not Claude/Codex custom audio, configured
 volume/device playback or evidence of audible sound on every host.
 Webhooks still require separate consent and configured endpoints.
-**Guarded terminal-window Click-to-Focus** is an explicit opt-in for a verified **local Linux/X11** origin. The installed Gemini observer must have an active binding and a selected schema-2 `agents.gemini` profile with `clickToFocus: true` and `terminalClickConsentVersion: 1`; a global `clickToFocus: false` vetoes it. It activates only the originating terminal **window**, never an exact chat/pane. Missing permission, Wayland, remote/headless or macOS/Windows leave the alert informational. The strict X11 daemon/click fixture passed, but a genuine authenticated Gemini-to-click path is **not yet qualified**. [Details](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
+**Guarded terminal-window Click-to-Focus** is an explicit opt-in for a verified **local Linux/X11** origin. The installed Gemini observer must have an active binding and a selected schema-2 `agents.gemini` profile with `clickToFocus: true` and `terminalClickConsentVersion: 1`; a global `clickToFocus: false` vetoes it. It activates only the originating terminal **window**, never an exact chat/pane. Missing permission, Wayland, remote/headless or macOS/Windows leave the alert informational. The shared strict X11 fixture and a separate [installed CLI test with a local provider](#automated-linux-desktop-e2e) cover this route; a genuine authenticated Gemini-to-click path is **not yet qualified**. [Details](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
 
 Questions, errors, plans, reviews, session-limit alerts, MCP notification tools and the `agent-notifications` skill are not Gemini capabilities. Claude/Codex capabilities and OpenCode limits remain separate.
 
@@ -111,9 +111,9 @@ The native CLI and production lifecycle checks passed on all five targets for th
 | Exact Gemini CLI 0.62.0 native hooks and permission UI | Passed on macOS arm64/Intel, Linux amd64/arm64 and Windows amd64, with a local provider fixture |
 | macOS arm64 desktop and visual test | Real CLI delivered completion and tool-permission alerts through our signed helper; macOS accepted both and the owner confirmed seeing both |
 | Windows amd64 native shell / notification API / visual desktop | Native CLI, production lifecycle and webhook passed; notification API and visual desktop unverified |
-| Linux amd64/arm64 native shell and webhook / desktop | Native CLI and production install/update/remove/webhook passed; desktop API and visual desktop unverified |
+| Linux amd64/arm64 native shell and webhook / desktop | Native CLI and production install/update/remove/webhook passed; separate amd64 [local-provider desktop coverage](#automated-linux-desktop-e2e) below; arm64 desktop unverified |
 | macOS Intel native CLI | Native CLI, production lifecycle and webhook passed; visual desktop unverified |
-| Guarded Linux/X11 terminal-window focus | Shared strict Xvfb/dunst/Xterm daemon test: synthetic `xdotool` click from an isolated Go sender; **not** an authenticated installed Gemini CLI-to-click qualification |
+| Guarded Linux/X11 terminal-window focus | Shared strict daemon test plus a separate [installed Gemini CLI desktop suite](#automated-linux-desktop-e2e), both using synthetic X11 input; authenticated Gemini CLI-to-click remains unqualified |
 | Public Agent Notifications availability | macOS amd64/arm64, Linux amd64/arm64 and Windows amd64; see [current platform versions](PLATFORM_RELEASE_CHANNELS.md) |
 
 A macOS observation will not imply Windows/Linux GUI verification. Injected
@@ -124,3 +124,19 @@ executable updates and removal while Gemini remained running. They also verified
 that a damaged receipt revokes consent, blocks new webhook delivery and preserves
 foreign hooks. macOS additionally verified desktop delivery while webhooks were
 disabled. Interrupted crash recovery, resume and nested sessions remain unqualified.
+
+## Automated Linux desktop E2E
+
+[`gemini-desktop-linux.yml`](../.github/workflows/gemini-desktop-linux.yml) builds the exact source and installs Gemini CLI **0.62.0** in a fresh TEST profile on Linux amd64. The CLI runs in a real xterm under an owned Xvfb/Openbox/dunst session and uses Gemini's supported gateway with a deterministic localhost model provider. Its native `AfterAgent` hook invokes the installed Agent Notifications executable; the test does not inject an event into the consumer or replace the notification daemon.
+
+The suite checks the completion banner and uses `xdotool` to click it, then observes both the active window and keyboard-focus owner. Four cases cover successful focus, disabled click consent, a supported policy-disable transaction after the banner appears, and a closed originating terminal. Installation and policy enable/disable use the normal product commands with the observed generation. XRes ownership, terminal ancestry, per-agent consent and click-time revalidation remain active.
+
+To run it on GitHub without cloud model credentials:
+
+```bash
+gh workflow run gemini-desktop-linux.yml \
+  --repo 777genius/agent-notifications \
+  --ref main
+```
+
+The workflow also runs automatically for relevant PRs and pushes to `main`. Its artifact records the source, CLI and product identities, bounded case results and cleanup outcome. Raw terminal output, model requests and private profiles are not uploaded. A passing result covers this local-provider completion route and automated X11 input; it does not qualify the live Google service, tool-permission clicks, sound, macOS/Windows, other terminals, panes or exact desktop chats. It also does not establish complete SDK telemetry flushing or release-wide desktop acceptance.

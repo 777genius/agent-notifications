@@ -116,7 +116,7 @@ Claude/Codex setup also installs the `agent-notifications` MCP server and `agent
 | **Qoder CLI** | Completion, questions, permissions, plans, opt-in subagent alerts and errors/rate limits | Configurable sounds; 5 bundled MP3s | Linux/X11 window, opt-in | [Native hooks and setup](docs/QODER.md) |
 | **Pi** | Final completion/API errors; blocking extension UI questions | Configurable sounds, local TUI | Local terminal, local TUI | [Setup and modes](docs/pi-notifications.md) |
 
-**Linux/X11 focus (Qoder, Gemini, Cursor):** Requires explicit opt-in and a verified local terminal window; unsupported or unverified origins receive notifications without a focus action. The shared focus mechanism is tested, but the complete installed, authenticated CLI → notification → click flow is not yet verified. This focuses a window, not an exact desktop chat. [Setup and test coverage](docs/CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
+**Linux/X11 focus (Qoder, Gemini, Cursor):** Requires explicit opt-in and a verified local terminal window; unsupported or unverified origins receive notifications without a focus action. The shared focus mechanism and Gemini's [local-provider CLI-to-click flow](docs/gemini-notifications.md#automated-linux-desktop-e2e) have automated tests; authenticated CLI-to-click remains unverified. This focuses a window, not an exact desktop chat. [Setup and test coverage](docs/CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
 
 **Native desktop checks still open:** [Pi on macOS/Windows (#561)](https://github.com/777genius/agent-notifications/issues/561) and [Qoder audible playback (#562)](https://github.com/777genius/agent-notifications/issues/562).
 
