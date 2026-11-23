@@ -423,7 +423,7 @@ func Inspect(ctx context.Context, o Options, r Request, preparedGlobal []byte) e
 	// its journal or durable setupState may have been lost after a previous
 	// partial update. Match Apply's read-only admission before any mutation.
 	if candidate.Policy.Enabled {
-		return inspectInitializedForEnable(o, s)
+		return inspectInitializedForEnable(ctx, o, s)
 	}
 	return nil
 }
