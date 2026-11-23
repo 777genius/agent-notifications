@@ -561,6 +561,12 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
             entry(premature, now, "assistant",
                   [tool("a", "Bash"), tool("b", "Edit")])],
                   generic, generic)
+        orphan = "TEST-permission-orphan-result"
+        emit_case(orphan, [
+            entry(orphan, now, "assistant", [tool("a", "Bash")]),
+            entry(orphan, now, "user",
+                  [{"type": "tool_result", "tool_use_id": "unseen"}])],
+                  generic, generic)
         stale = "TEST-permission-stale-parallel"
         emit_case(stale, [entry(stale, old, "assistant", [tool("old", "Bash")]),
                           entry(stale, now, "assistant", [tool("new", "Edit")])],
@@ -587,8 +593,9 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
         host = "Claude requests permission to use WebFetch"
         emit_case(specific, [entry(specific, now, "assistant", [tool("a", "Bash")])],
                   host, host)
-        return {"installed_hook_webhooks": 8, "parallel_fallback": True,
+        return {"installed_hook_webhooks": 9, "parallel_fallback": True,
                 "duplicate_correlation_fallback": True, "premature_result_fallback": True,
+                "orphan_result_fallback": True,
                 "stale_parallel_fallback": True, "completed_call_correlation": True,
                 "misplaced_role_fallback": True, "host_message_authoritative": True,
                 "raw_commands_rendered": False}

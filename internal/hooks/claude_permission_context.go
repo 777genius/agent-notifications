@@ -157,6 +157,13 @@ func claudePermissionRecentTool(session SessionContext) string {
 			pending[item.ID] = pendingTool{name: safeClaudeToolLabel(item.Name), at: at}
 		}
 	}
+	// A tool_result without a matching tool_use means this supposedly full
+	// transcript cannot prove which calls are still pending. Fail closed.
+	for id := range completed {
+		if !seenUses[id] {
+			return ""
+		}
+	}
 	if len(pending) != 1 {
 		return ""
 	}

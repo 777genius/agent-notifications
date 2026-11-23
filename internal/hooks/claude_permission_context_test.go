@@ -131,6 +131,14 @@ func TestClaudePermissionRecentToolRequiresUniqueFreshUnresolvedRecord(t *testin
 			t.Fatalf("earlier result erased later competing tool: %q", name)
 		}
 	})
+	t.Run("unmatched tool result cannot certify a unique pending call", func(t *testing.T) {
+		s := writeClaudePermissionFixture(t, "test-orphan-result",
+			claudeToolRecord("test-orphan-result", "call-bash", "Bash", now),
+			claudeToolResultRecord("test-orphan-result", "call-unseen", now))
+		if name := claudePermissionRecentTool(s); name != "" {
+			t.Fatalf("unmatched result produced a guessed tool identity: %q", name)
+		}
+	})
 	t.Run("unknown concurrent tool prevents a false single match", func(t *testing.T) {
 		s := writeClaudePermissionFixture(t, "test-unknown",
 			claudeToolRecord("test-unknown", "call-1", "Bash", now),
