@@ -131,6 +131,8 @@ disabled. Interrupted crash recovery, resume and nested sessions remain unqualif
 
 The suite checks the completion banner and uses `xdotool` to click it, then observes both the active window and keyboard-focus owner. Four cases cover successful focus, disabled click consent, a supported policy-disable transaction after the banner appears, and a closed originating terminal. Installation and policy enable/disable use the normal product commands with the observed generation. XRes ownership, terminal ancestry, per-agent consent and click-time revalidation remain active.
 
+The three actionable-banner cases use the left button and require the real Dunst `ActionInvoked` signal. With click consent disabled, the banner must have no action; the test dismisses it with the middle button and requires its matching user-dismissal signal before observing focus. Negative cases check focus at repeated samples for at least 15 seconds after native click delivery, including a validated final sample; transitions between samples are not covered.
+
 To run it on GitHub without cloud model credentials:
 
 ```bash

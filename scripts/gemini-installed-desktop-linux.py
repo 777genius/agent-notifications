@@ -18,6 +18,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -46,7 +47,30 @@ def module(name, path):
 N = module("gemini_desktop_primitives", REPO / "scripts/pi-native-preflight.py")
 G0 = module("gemini_desktop_provider", REPO / "tests/integration/gemini_native_e2e.py")
 G5 = module("gemini_desktop_contracts", REPO / "tests/integration/gemini_notifications_e2e.py")
-X11 = module("gemini_desktop_xres_observer", REPO / "scripts/navigation-linux-portal-callback-probe.py")
+XRES_OWNER_HELPER = REPO / "scripts/navigation-linux-portal-callback-probe.py"
+XRES_OWNER_WORKER = r'''
+import importlib.util
+import json
+import os
+import sys
+
+spec = importlib.util.spec_from_file_location("TEST_xres_owner", sys.argv[1])
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+window = None if sys.argv[3] == "-" else int(sys.argv[3])
+owner = helper.XResWindowOwner(sys.argv[2])
+try:
+    result = {"schema_version": 1, "xres_version": owner.version,
+              "window": window, "pid": None if window is None else owner.pid(window),
+              "worker_pid": os.getpid(), "parent_pid": os.getppid(),
+              "owned_unmapped_window_self_check": True}
+finally:
+    owner.close()
+# Xlib can terminate this worker even during close. Emit no success until it
+# returns; the parent never imports the helper or owns an Xlib connection.
+result["connection_closed"] = True
+print(json.dumps(result, separators=(",", ":")))
+'''
 
 
 class Failed(Exception):
@@ -167,15 +191,25 @@ def unchanged_focus(observe, expected, seconds=15, now=time.monotonic, pause=tim
         samples += 1
         elapsed = now() - started
         if elapsed >= seconds:
-            return {"seconds": round(elapsed, 3), "samples": samples, "unchanged": True}
+            return {"seconds": round(elapsed, 3), "samples": samples,
+                    "unchanged_at_observed_samples": True,
+                    "observation_method": "sampled_polling",
+                    "requested_sleep_max_seconds": 0.05,
+                    "continuous_transition_proof": False}
         pause(min(0.05, seconds - elapsed))
 
 
 def observe_native_click(desktop, row, expected, positive):
-    desktop.click()
+    # Preserve the server's default action binding for strict notifications.
+    # An action-free informational banner is dismissed with its middle button.
+    button = 1 if row["default_action"] else 2
+    desktop.click(button)
     # Establish actual native delivery before starting the focus acceptance
     # window. A delayed action must not arrive after an already-passed receipt.
     native_notify = desktop.observer.after_click(row)
+    native_notify.update(mouse_button=button,
+                         input_semantics="default_action" if row["default_action"]
+                         else "informational_user_dismissal")
     observation = None
     if positive:
         N.wait_for(lambda: desktop.focus() == expected,
@@ -549,8 +583,8 @@ class NotifyObserver:
             def dismissals():
                 self.pump()
                 return [event for event in self.closed if event["id"] == row["id"]]
-            # The TEST server's ordinary left binding performs do_action and
-            # close_current. With no action, only a real user-dismissed close
+            # The TEST server's middle binding performs close_current. With
+            # no action, only a real user-dismissed close
             # proves the click reached this banner. Expiry/DBus closure cannot.
             # This check precedes history(), which itself calls close-all.
             N.wait_for(lambda: bool(dismissals()), seconds=3,
@@ -586,18 +620,97 @@ class NotifyObserver:
         require(not errors, "native_monitor_connection_close_failed")
 
 
+def xres_worker_result(raw, window):
+    require(isinstance(raw, str) and 0 < len(raw.encode("utf-8")) <= 4096,
+            "native_window_owner_reply_bound")
+    def closed_object(pairs):
+        require(len({key for key, _ in pairs}) == len(pairs),
+                "native_window_owner_duplicate_field")
+        return dict(pairs)
+    try:
+        value = json.loads(raw, object_pairs_hook=closed_object)
+    except (ValueError, UnicodeError):
+        raise Failed("native_window_owner_reply_invalid")
+    fields = {"schema_version", "xres_version", "window", "pid", "worker_pid",
+              "parent_pid", "owned_unmapped_window_self_check", "connection_closed"}
+    require(type(value) is dict and set(value) == fields
+            and type(value["schema_version"]) is int and value["schema_version"] == 1,
+            "native_window_owner_reply_shape")
+    version = value["xres_version"]
+    require(type(version) is list and len(version) == 2
+            and all(type(part) is int and 0 <= part <= 65535 for part in version)
+            and tuple(version) >= (1, 2), "native_window_owner_version_invalid")
+    require(type(value["worker_pid"]) is int and 0 < value["worker_pid"] < 2**31
+            and value["worker_pid"] != os.getpid()
+            and type(value["parent_pid"]) is int and value["parent_pid"] == os.getpid(),
+            "native_window_owner_worker_identity_invalid")
+    if window is None:
+        require(value["window"] is None and value["pid"] is None,
+                "native_window_owner_probe_shape")
+    else:
+        require(type(value["window"]) is int and value["window"] == window
+                and type(value["pid"]) is int and 0 < value["pid"] < 2**31,
+                "native_window_owner_pid_invalid")
+    require(value["owned_unmapped_window_self_check"] is True
+            and value["connection_closed"] is True, "native_window_owner_worker_incomplete")
+    return value
+
+
+class IsolatedWindowOwner:
+    """Each Xlib connection belongs to one synchronous, bounded child."""
+    def __init__(self, lab):
+        self.lab, self.version = lab, None
+        self.report = {"api": "XRes_local_client_PID", "isolation": "bounded_child_per_query",
+                       "parent_x11_connection": False, "worker_timeout_seconds": 5,
+                       "receipt_max_bytes": 4096, "queries": []}
+
+    def query(self, window):
+        require(len(self.report["queries"]) < 8, "native_window_owner_query_bound")
+        attempt = {"window": window, "status": "failed"}
+        self.report["queries"].append(attempt)
+        try:
+            try:
+                code, out, err = run_command(
+                    [sys.executable, "-I", "-B", "-c", XRES_OWNER_WORKER, XRES_OWNER_HELPER,
+                     self.lab.env["DISPLAY"], "-" if window is None else str(window)],
+                    self.lab.root, self.lab.env, timeout=5)
+            except subprocess.TimeoutExpired:
+                raise Failed("native_window_owner_worker_timeout")
+            attempt["worker_exit"] = code
+            require(code == 0, "native_window_owner_worker_failed")
+            require(not err, "native_window_owner_worker_stderr")
+            value = xres_worker_result(out.decode("utf-8"), window)
+            require(self.version is None or value["xres_version"] == self.version,
+                    "native_window_owner_version_changed")
+            attempt.update(value, status="passed")
+            return value
+        except Exception as error:
+            attempt["failure"] = failure_code(error)
+            raise
+
+    def probe(self):
+        value = self.query(None)
+        self.version = value["xres_version"]
+        self.report.update(version=self.version, owned_unmapped_window_self_check=True)
+
+    def pid(self, window):
+        require(re.fullmatch(r"[1-9][0-9]{0,9}", str(window))
+                and int(window) < 2**32, "native_window_owner_xid_invalid")
+        return self.query(int(window))["pid"]
+
+
 class GeminiDesktopLab(N.Lab):
-    """Configure only this owned Dunst before its first process starts."""
+    """Verify the owned Dunst's ordinary action/dismissal bindings at startup."""
     def start(self, argv):
         if Path(argv[0]).name == "dunst":
             config = self.root / "dunstrc"
             require(len(argv) == 3 and argv[1] == "-config" and Path(argv[2]) == config
                     and config.is_file() and not config.is_symlink(), "owned_dunst_config_required")
-            old = config.read_text()
-            original = "mouse_left_click = do_action\n"
-            require(old.count(original) == 1, "owned_dunst_binding_mismatch")
-            config.write_text(old.replace(original, "mouse_left_click = do_action, close_current\n"))
-            self.report["dunst_left_click"] = ["do_action", "close_current"]
+            content = config.read_text()
+            require(content.count("mouse_left_click = do_action\n") == 1
+                    and content.count("mouse_middle_click = close_current\n") == 1,
+                    "owned_dunst_binding_mismatch")
+            self.report["dunst_click_bindings"] = {"1": "do_action", "2": "close_current"}
         return super().start(argv)
 
 
@@ -657,7 +770,8 @@ class Desktop:
             return N.verified_title_window(titled, status, owner, owner_status, terminal.pid)
         return N.wait_for(locate, seconds=18, failure="actual_cli_window_not_mapped")
 
-    def click(self):
+    def click(self, button=1):
+        require(type(button) is int and button in (1, 2), "native_click_button_invalid")
         require(self.displayed() == 1 and self.banner_server.poll() is None,
                 "product_banner_missing_at_click")
         self.x("mousemove", "1100", "70")
@@ -668,7 +782,7 @@ class Desktop:
                 and self.window_owner.pid(window) == self.banner_server.pid
                 and self.banner_server.poll() is None,
                 "click_pointer_not_over_owned_banner")
-        self.x("click", "1")
+        self.x("click", str(button))
 
     def history(self):
         self.lab.run(["dunstctl", "close-all"], timeout=5)
@@ -793,7 +907,7 @@ def run_case(name, args, root, installation, provider, desktop, report):
         report["cases"].append({"case": name, "status": "passed", "actual_cli_mode": "interactive_TUI",
             "provider_stream_calls": stream_calls, "native_hook": sdk, "native_notify": native_notify,
             "product_webhooks": 1, "banner_observed": True, "banner_sha256": sha(screenshot),
-            "click_input": "xdotool_X11_XTest", "mouse_button": 1,
+            "click_input": "xdotool_X11_XTest", "mouse_button": native_notify["mouse_button"],
             "pointer_over_owned_banner": True, "banner_owner_observer": "XRes_1.2_local_client_PID",
             "native_click_delivery_verified": True,
             "focus_observation_anchor": "native_click_delivery_observed",
@@ -893,11 +1007,10 @@ def run(args):
                 and libc.prctl(36, 1, 0, 0, 0) == 0, "owned_child_collection_unavailable")
         subreaper_set = True
         paths, _, windows = N.linux_desktop(lab, terminal_lifetime=600)
-        window_owner = X11.XResWindowOwner(lab.env["DISPLAY"])
-        report["native_window_owner"] = {"api": "XRes_local_client_PID",
-                                        "version": window_owner.version,
-                                        "owned_unmapped_window_self_check": True}
-        report["dunst_left_click"] = lab.report["dunst_left_click"]
+        window_owner = IsolatedWindowOwner(lab)
+        report["native_window_owner"] = window_owner.report
+        window_owner.probe()
+        report["dunst_click_bindings"] = lab.report["dunst_click_bindings"]
         report["desktop_tools"] = {name: lab.report["tools"][name] for name in
                                    ("Xvfb", "openbox", "dunst", "xterm", "xdotool", "dbus-daemon", "ffmpeg")}
         env.update({key: lab.env[key] for key in
@@ -957,12 +1070,6 @@ def run(args):
                 report["native_monitor_connections_closed"] = True
             except Exception as error:
                 cleanup_errors.append(failure_code(error))
-        if window_owner:
-            try:
-                window_owner.close()
-                report["native_window_owner_closed"] = True
-            except Exception as error:
-                cleanup_errors.append(failure_code(error))
         if installation and (installation.registered or installation.install_attempted):
             try:
                 installation.remove()
@@ -995,7 +1102,6 @@ def run(args):
                 cleanup_errors.append("subreaper_restore_failed")
         clean = (not cleanup_errors and report.get("owned_direct_children_collected") is True
                  and report.get("native_monitor_connections_closed") is True
-                 and report.get("native_window_owner_closed") is True
                  and report.get("provider_thread_collected") is True
                  and report.get("managed_cleanup") == "disabled_and_removed")
         report["owned_children_collected"] = clean

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Failure-boundary checks; only the owned Bash exit observer starts children."""
+"""Failure-boundary checks with owned exit/observer workers; no GUI required."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -64,6 +66,10 @@ class FocusTests(unittest.TestCase):
                                   pause=lambda value: clock.__setitem__(0, clock[0] + value))
         self.assertGreaterEqual(result["seconds"], 15)
         self.assertGreater(result["samples"], 250)
+        self.assertTrue(result["unchanged_at_observed_samples"])
+        self.assertEqual(result["observation_method"], "sampled_polling")
+        self.assertFalse(result["continuous_transition_proof"])
+        self.assertEqual(result["requested_sleep_max_seconds"], 0.05)
 
     def test_transient_wrong_focus_cannot_be_hidden_by_later_recovery(self):
         clock = [0.0]
@@ -101,23 +107,28 @@ class FocusTests(unittest.TestCase):
             D.validated_focus_sample(observe, expected)
 
     def test_negative_window_starts_after_native_delivery(self):
-        clock, proof_at, observations = [0.0], [], []
+        clock, proof_at, observations, order = [0.0], [], [], []
         expected = {"window": "1", "keyboard_pid": 2}
         def delivered(row):
+            order.append("receipt")
             clock[0] += 7
             proof_at.append(clock[0])
             return {"native_click_delivery": "observed"}
         def focus():
             observations.append(clock[0])
             return dict(expected)
-        desktop = SimpleNamespace(click=lambda: None, focus=focus,
+        desktop = SimpleNamespace(click=lambda button: order.append(("click", button)), focus=focus,
                                   observer=SimpleNamespace(after_click=delivered))
         unchanged = D.unchanged_focus
         def monitor(observe, wanted):
             return unchanged(observe, wanted, now=lambda: clock[0],
                              pause=lambda value: clock.__setitem__(0, clock[0] + value))
         with patch.object(D, "unchanged_focus", side_effect=monitor):
-            _, period, final = D.observe_native_click(desktop, {}, expected, False)
+            native, period, final = D.observe_native_click(
+                desktop, {"default_action": False}, expected, False)
+        self.assertEqual(order, [("click", 2), "receipt"])
+        self.assertEqual(native["mouse_button"], 2)
+        self.assertEqual(native["input_semantics"], "informational_user_dismissal")
         self.assertGreaterEqual(period["seconds"], 15)
         self.assertGreaterEqual(observations[0], proof_at[0])
         self.assertGreaterEqual(clock[0] - proof_at[0], 15)
@@ -129,7 +140,7 @@ class FocusTests(unittest.TestCase):
         def delivered(row):
             current[0] = {"window": "3", "keyboard_pid": 4}
             return {"native_click_delivery": "observed"}
-        desktop = SimpleNamespace(click=lambda: None, focus=lambda: current[0],
+        desktop = SimpleNamespace(click=lambda button: None, focus=lambda: current[0],
                                   observer=SimpleNamespace(after_click=delivered))
         unchanged = D.unchanged_focus
         def monitor(observe, wanted):
@@ -137,7 +148,7 @@ class FocusTests(unittest.TestCase):
                              pause=lambda value: clock.__setitem__(0, clock[0] + value))
         with patch.object(D, "unchanged_focus", side_effect=monitor):
             with self.assertRaisesRegex(D.Failed, "negative_click_changed_focus"):
-                D.observe_native_click(desktop, {}, expected, False)
+                D.observe_native_click(desktop, {"default_action": True}, expected, False)
 
 
 class ManagedCleanupTests(unittest.TestCase):
@@ -421,6 +432,135 @@ class NativeNotifyTests(unittest.TestCase):
             obj.after_click(row)
 
 
+class XResWorkerTests(unittest.TestCase):
+    # Unit-only fault injection. Native runs always use the pinned repo helper.
+    HELPER = r'''
+import os
+from pathlib import Path
+import time
+
+trace = Path(__file__).with_suffix(".trace")
+def record(phase):
+    with trace.open("a") as stream:
+        stream.write(str(os.getpid()) + " " + phase + "\n")
+
+class XResWindowOwner:
+    def __init__(self, mode):
+        self.mode, self.version = mode, [1, 2]
+        record("open")
+        if mode == "fatal_open":
+            os._exit(71)
+    def pid(self, window):
+        record("query")
+        if self.mode == "fatal_query":
+            os._exit(72)
+        if self.mode == "exception":
+            raise RuntimeError("PRIVATE worker failure")
+        if self.mode == "timeout":
+            time.sleep(60)
+        return 7
+    def close(self):
+        record("close")
+        if self.mode == "fatal_close":
+            os._exit(73)
+'''
+
+    def fixture(self, mode):
+        temporary = tempfile.TemporaryDirectory(prefix="TEST-gemini-xres-worker-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        lab = D.N.Lab(root, {})
+        self.addCleanup(lab.close)
+        helper = root / "TEST-xres-helper.py"
+        helper.write_text(self.HELPER)
+        substitute = patch.object(D, "XRES_OWNER_HELPER", helper)
+        substitute.start()
+        self.addCleanup(substitute.stop)
+        lab.env["DISPLAY"] = mode
+        return lab, D.IsolatedWindowOwner(lab), root
+
+    def assert_workers_reaped(self, root):
+        records = (root / "TEST-xres-helper.trace").read_text().splitlines()
+        self.assertTrue(records)
+        for pid in {int(row.split()[0]) for row in records}:
+            self.assertNotEqual(pid, os.getpid())
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(pid, os.WNOHANG)
+        return [row.split()[1] for row in records]
+
+    def test_real_worker_closes_before_success_and_is_reaped(self):
+        lab, owner, root = self.fixture("success")
+        owner.probe()
+        self.assertEqual(owner.pid("83"), 7)
+        self.assertEqual(owner.version, [1, 2])
+        self.assertFalse(owner.report["parent_x11_connection"])
+        self.assertEqual([row["status"] for row in owner.report["queries"]], ["passed", "passed"])
+        self.assertTrue(all(row["connection_closed"] is True for row in owner.report["queries"]))
+        self.assertEqual(self.assert_workers_reaped(root), ["open", "close", "open", "query", "close"])
+        lab.close()
+
+    def test_fatal_exit_and_exception_preserve_parent_cleanup_and_receipt(self):
+        for mode, exit_code in (("fatal_open", 71), ("fatal_query", 72),
+                                ("fatal_close", 73), ("exception", 1)):
+            with self.subTest(mode=mode):
+                lab, owner, root = self.fixture(mode)
+                sentinel = lab.start([sys.executable, "-I", "-c", "import time; time.sleep(60)"])
+                try:
+                    with self.assertRaisesRegex(D.Failed, "native_window_owner_worker_failed"):
+                        owner.pid("83")
+                finally:
+                    lab.close()
+                self.assertIsNotNone(sentinel.poll())
+                self.assertTrue(lab.report["owned_children_collected"])
+                self.assertEqual(owner.report["queries"][-1]["worker_exit"], exit_code)
+                self.assertEqual(owner.report["queries"][-1]["status"], "failed")
+                self.assertNotIn("connection_closed", owner.report["queries"][-1])
+                self.assertNotIn("PRIVATE", json.dumps(owner.report))
+                D.write_json(root / "parent-receipt.json",
+                             {"status": "failed", "owner": owner.report, "cleanup_reached": True})
+                self.assertTrue(json.loads((root / "parent-receipt.json").read_text())["cleanup_reached"])
+                self.assert_workers_reaped(root)
+
+    def test_timed_out_worker_is_collected_before_parent_cleanup(self):
+        lab, owner, root = self.fixture("timeout")
+        original_run = D.run_command
+        def shorter_test_bound(argv, cwd, env, timeout):
+            self.assertEqual(timeout, 5)
+            return original_run(argv, cwd, env, timeout=1)
+        sentinel = lab.start([sys.executable, "-I", "-c", "import time; time.sleep(60)"])
+        try:
+            with patch.object(D, "run_command", side_effect=shorter_test_bound):
+                with self.assertRaisesRegex(D.Failed, "native_window_owner_worker_timeout"):
+                    owner.pid("83")
+        finally:
+            lab.close()
+        self.assertIsNotNone(sentinel.poll())
+        self.assertTrue(lab.report["owned_children_collected"])
+        self.assertEqual(owner.report["queries"][-1]["failure"], "native_window_owner_worker_timeout")
+        self.assertNotIn("connection_closed", owner.report["queries"][-1])
+        self.assert_workers_reaped(root)
+
+    def test_closed_reply_rejects_missing_identity_and_false_completion(self):
+        valid = {"schema_version": 1, "xres_version": [1, 2], "window": 83, "pid": 7,
+                 "worker_pid": os.getpid() + 1, "parent_pid": os.getpid(),
+                 "owned_unmapped_window_self_check": True, "connection_closed": True}
+        self.assertEqual(D.xres_worker_result(json.dumps(valid), 83), valid)
+        for field, value in (("schema_version", True), ("xres_version", [1, 1]),
+                             ("xres_version", [True, 2]), ("window", 84), ("pid", True),
+                             ("pid", 0), ("worker_pid", os.getpid()),
+                             ("parent_pid", os.getpid() + 1),
+                             ("owned_unmapped_window_self_check", False),
+                             ("connection_closed", False), ("extra", "PRIVATE")):
+            wrong = dict(valid)
+            wrong[field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(D.Failed):
+                D.xres_worker_result(json.dumps(wrong), 83)
+        raw = json.dumps(valid)
+        for malformed in ("[]", "{}", raw + raw, '{"schema_version":1,' + raw[1:], " " * 4097):
+            with self.subTest(malformed=malformed[:30]), self.assertRaises(D.Failed):
+                D.xres_worker_result(malformed, 83)
+
+
 class BannerOwnershipTests(unittest.TestCase):
     def desktop(self, owner_pid):
         obj = object.__new__(D.Desktop)
@@ -437,10 +577,11 @@ class BannerOwnershipTests(unittest.TestCase):
         return obj, calls
 
     def test_banner_without_ewmh_pid_uses_server_owner(self):
-        obj, calls = self.desktop(7)
-        with patch.object(D, "still_present", return_value=True):
-            obj.click()
-        self.assertEqual(calls[-1], ("click", "1"))
+        for button in (1, 2):
+            obj, calls = self.desktop(7)
+            with self.subTest(button=button), patch.object(D, "still_present", return_value=True):
+                obj.click(button)
+            self.assertEqual(calls[-1], ("click", str(button)))
 
     def test_unknown_foreign_or_expired_server_owner_prevents_click(self):
         for owner_pid, alive in ((9, True), (0, True), (7, False)):
@@ -451,23 +592,25 @@ class BannerOwnershipTests(unittest.TestCase):
                     obj.click()
             self.assertNotIn(("click", "1"), calls)
 
-    def test_owned_server_binding_is_set_before_start(self):
+    def test_owned_server_bindings_are_verified_without_forcing_action_close(self):
         with tempfile.TemporaryDirectory(prefix="TEST-gemini-dunst-") as temporary:
             lab = D.GeminiDesktopLab(Path(temporary), {})
             config = lab.root / "dunstrc"
-            config.write_text("[global]\nmouse_left_click = do_action\n")
+            content = "[global]\nmouse_left_click = do_action\nmouse_middle_click = close_current\n"
+            config.write_text(content)
             def started(argv):
-                self.assertIn("mouse_left_click = do_action, close_current\n", config.read_text())
+                self.assertEqual(config.read_text(), content)
                 return "owned_child"
             with patch.object(D.N.Lab, "start", side_effect=started):
                 self.assertEqual(lab.start(["/usr/bin/dunst", "-config", config]), "owned_child")
-            self.assertEqual(lab.report["dunst_left_click"], ["do_action", "close_current"])
+            self.assertEqual(lab.report["dunst_click_bindings"], {"1": "do_action", "2": "close_current"})
 
     def test_other_config_and_unexpected_binding_are_not_rewritten(self):
         with tempfile.TemporaryDirectory(prefix="TEST-gemini-dunst-") as temporary:
             lab = D.GeminiDesktopLab(Path(temporary), {})
             for name, content in (("other.conf", "mouse_left_click = do_action\n"),
-                                  ("dunstrc", "mouse_left_click = context\n")):
+                                  ("dunstrc", "mouse_left_click = context\n"),
+                                  ("dunstrc", "mouse_left_click = do_action\n")):
                 config = lab.root / name
                 config.write_text(content)
                 with self.subTest(name=name), patch.object(D.N.Lab, "start") as start:
