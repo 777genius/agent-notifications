@@ -70,11 +70,36 @@ func TestInspectChecksInitializationAdmissionBeforeEnable(t *testing.T) {
 		o.Fault = nil
 		r.ExpectedGeneration = result.Generation
 		before := tree(t, o.ControlRoot)
-		wantReason(t, Inspect(contextFor(t), o, r, []byte(globalConfig)), "initialization_interrupted")
+		wantReason(t, Inspect(contextFor(t), o, r, []byte(globalConfig)), "initialization_recovery_required")
 		if !reflect.DeepEqual(before, tree(t, o.ControlRoot)) {
 			t.Fatal("read-only preflight replayed incomplete provisioning")
 		}
 	})
+	for _, phase := range []string{"journal_initialized", "ownership_ready"} {
+		t.Run("fully staged journal can resume at "+phase, func(t *testing.T) {
+			o, r := fixture(t)
+			o.Fault = func(step string) error {
+				if step == phase {
+					return fmt.Errorf("test interrupted")
+				}
+				return nil
+			}
+			result, err := Apply(contextFor(t), o, r)
+			wantReason(t, err, "initialization_interrupted")
+			o.Fault = nil
+			r.ExpectedGeneration = result.Generation
+			before := tree(t, o.ControlRoot)
+			if err := Inspect(contextFor(t), o, r, []byte(globalConfig)); err != nil {
+				t.Fatalf("replayable staged state rejected: %v", err)
+			}
+			if !reflect.DeepEqual(before, tree(t, o.ControlRoot)) {
+				t.Fatal("preflight itself resumed the journal")
+			}
+			if _, err := Apply(contextFor(t), o, r); err != nil {
+				t.Fatalf("legitimate interrupted setup could not resume: %v", err)
+			}
+		})
+	}
 	t.Run("healthy existing initialization remains ready", func(t *testing.T) {
 		o, r := fixture(t)
 		result, err := Apply(contextFor(t), o, r)
