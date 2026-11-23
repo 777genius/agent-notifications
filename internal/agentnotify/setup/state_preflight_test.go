@@ -100,6 +100,31 @@ func TestInspectChecksInitializationAdmissionBeforeEnable(t *testing.T) {
 			}
 		})
 	}
+	t.Run("replaced interrupted stage cannot borrow durable owner identity", func(t *testing.T) {
+		o, r := fixture(t)
+		o.Fault = func(step string) error {
+			if step == "journal_initialized" {
+				return fmt.Errorf("test interruption")
+			}
+			return nil
+		}
+		result, err := Apply(contextFor(t), o, r)
+		wantReason(t, err, "initialization_interrupted")
+		o.Fault = nil
+		r.ExpectedGeneration = result.Generation
+		stage := filepath.Join(o.ControlRoot, stageName)
+		if err := os.Rename(stage, stage+"-retired"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(stage, 0700); err != nil {
+			t.Fatal(err)
+		}
+		before := tree(t, o.ControlRoot)
+		wantReason(t, Inspect(contextFor(t), o, r, []byte(globalConfig)), "initialization_recovery_required")
+		if !reflect.DeepEqual(before, tree(t, o.ControlRoot)) {
+			t.Fatal("preflight altered foreign stage on ownership mismatch")
+		}
+	})
 	t.Run("healthy existing initialization remains ready", func(t *testing.T) {
 		o, r := fixture(t)
 		result, err := Apply(contextFor(t), o, r)
