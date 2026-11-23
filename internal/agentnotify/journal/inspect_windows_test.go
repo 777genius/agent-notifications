@@ -4,6 +4,7 @@ package journal
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,8 +73,26 @@ func TestWindowsReadOnlySnapshotHandlePermitsAtomicReplacement(t *testing.T) {
 	if err := os.WriteFile(candidate, body, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(candidate, path); err != nil {
-		t.Fatalf("read-only inspector blocked atomic snapshot publication: %v", err)
+	// Publish through the actual journal writer, rather than os.Rename
+	// (which does not select native POSIX replacement on Windows).
+	if err := renameAt(dir, "candidate-snapshot.json", "journal.json", true); err != nil {
+		t.Fatalf("read-only inspector blocked writer's atomic snapshot publication: %v", err)
+	}
+	prior, err := held.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(prior, current) {
+		t.Fatal("writer did not replace the destination while inspector retained old handle")
+	}
+	// Previously opened handle must still read the original immutable bytes.
+	oldBody, err := io.ReadAll(held)
+	if err != nil || !bytes.Equal(oldBody, body) {
+		t.Fatal("prior immutable snapshot was not preserved for the held reader", err)
 	}
 	namespace, err := InspectReadOnly(windowsJournalContext(t), Options{Root: root, Clock: clock})
 	if err != nil || namespace != store.Namespace() {
