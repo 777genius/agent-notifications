@@ -15,5 +15,18 @@ func inspectPersistedStageIdentity(rootPath, expected string) error {
 		return err
 	}
 	defer func() { _ = stage.Close() }()
-	return matches(stage, expected)
+	if err := matches(stage, expected); err != nil {
+		return err
+	}
+	journalDir, err := openChild(stage, "journal")
+	if err != nil {
+		return err
+	}
+	_ = journalDir.Close()
+	spool, err := openChild(stage, "native-spool")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = spool.Close() }()
+	return checkLock(spool)
 }
