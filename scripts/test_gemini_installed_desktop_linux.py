@@ -331,6 +331,52 @@ class RunFailureTests(unittest.TestCase):
             self.assertFalse(labs[0].root.parent.exists())
 
 
+class NativeQuitTests(unittest.TestCase):
+    def drive_quit(self, *, accept_submit=True, exit_code=0):
+        # Gemini 0.62.0 KeypressContext.bufferFastReturn treats Enter within
+        # 30ms of insertable input as a newline. Model that upstream boundary,
+        # not a successful CLI: only the native workflow qualifies the latter.
+        clock, typed_at, keys = [100.0], [None], []
+        terminal = SimpleNamespace(pid=42, returncode=None)
+        terminal.poll = lambda: terminal.returncode
+        desktop = object.__new__(D.Desktop)
+        desktop.activate = lambda window, pid: self.assertEqual((window, pid), ("100", 42))
+
+        def input_event(*argv):
+            keys.append(argv)
+            if argv == ("type", "--clearmodifiers", "--delay", "1", "--", "/quit"):
+                typed_at[0] = clock[0]
+            elif argv == ("key", "--clearmodifiers", "Return"):
+                self.assertIsNotNone(typed_at[0])
+                if accept_submit and clock[0] - typed_at[0] > 0.030:
+                    terminal.returncode = exit_code
+            else:
+                self.fail("Unexpected input or forced shutdown: " + repr(argv))
+
+        desktop.x = input_event
+        with patch.object(D.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(D.time, "sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)), \
+             patch.object(D, "still_present", return_value=False), \
+             patch.object(D.N, "wait_for", wraps=D.N.wait_for) as wait:
+            try:
+                desktop.quit(terminal, "100", [{"pid": 43}])
+            finally:
+                self.assertEqual([argv[0] for argv in keys], ["type", "key"])
+                self.assertEqual(wait.call_args_list[0].kwargs["seconds"], 12)
+        return terminal.returncode
+
+    def test_quit_submits_after_native_paste_guard(self):
+        self.assertEqual(self.drive_quit(), 0)
+
+    def test_ignored_quit_remains_a_bounded_failure(self):
+        with self.assertRaisesRegex(D.N.Unqualified, "actual_cli_graceful_exit_unconfirmed"):
+            self.drive_quit(accept_submit=False)
+
+    def test_nonzero_cli_exit_cannot_pass(self):
+        with self.assertRaisesRegex(D.Failed, "actual_cli_exit_nonzero"):
+            self.drive_quit(exit_code=7)
+
+
 class ExitObserverTests(unittest.TestCase):
     def observe(self, receipt, code):
         bash = shutil.which("bash")

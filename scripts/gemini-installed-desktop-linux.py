@@ -810,6 +810,9 @@ class Desktop:
         require(terminal.poll() is None, "actual_cli_exited_before_quit")
         self.activate(origin, terminal.pid)
         self.x("type", "--clearmodifiers", "--delay", "1", "--", "/quit")
+        # Gemini 0.62.0 turns Return within 30ms of text into a pasted newline.
+        # Use the same deliberate input separation as G0.Terminal.write_line.
+        time.sleep(0.15)
         self.x("key", "--clearmodifiers", "Return")
         N.wait_for(lambda: terminal.poll() is not None, seconds=12,
                    failure="actual_cli_graceful_exit_unconfirmed")
@@ -894,6 +897,7 @@ def run_case(name, args, root, installation, provider, desktop, report):
         if name == "revoke-after-banner":
             progress["policy_revocation"] = installation.change(False)
         elif name == "stale-origin":
+            progress["phase"] = "stale_origin_shutdown"
             desktop.quit(terminal, origin, nodes)
             desktop.activate(desktop.distractor, desktop.distractor_pid)
             require(not still_present(terminal_record) and terminal.poll() == 0, "stale_origin_still_alive")
@@ -904,6 +908,7 @@ def run_case(name, args, root, installation, provider, desktop, report):
             if name == "positive" else expected, name == "positive")
         desktop.history()
         if terminal.poll() is None:
+            progress["phase"] = "native_cli_shutdown"
             desktop.quit(terminal, origin, nodes)
         progress["phase"] = "native_receipt_projection"
         require(G5.bounded_read(exit_receipt, 32) == b"0\n", "native_cli_exit_receipt_not_zero")
