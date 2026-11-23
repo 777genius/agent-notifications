@@ -16,5 +16,20 @@ func inspectPersistedStageIdentity(rootPath, expected string) error {
 		return err
 	}
 	defer func() { _ = stage.Close() }()
-	return matches(stage, root, expected)
+	if err := matches(stage, root, expected); err != nil {
+		return err
+	}
+	// Exact private directories and permanent spool lock must satisfy the
+	// same descriptor-relative checks that Apply uses when resuming.
+	journalDir, err := openChild(stage, "journal")
+	if err != nil {
+		return err
+	}
+	_ = journalDir.Close()
+	spool, err := openChild(stage, "native-spool")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = spool.Close() }()
+	return checkLock(spool)
 }
