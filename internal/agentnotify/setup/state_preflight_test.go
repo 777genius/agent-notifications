@@ -140,6 +140,25 @@ func TestInspectChecksInitializationAdmissionBeforeEnable(t *testing.T) {
 			t.Fatal("read-only preflight modified healthy existing state")
 		}
 	})
+	t.Run("corrupt journal contents must fail before enable", func(t *testing.T) {
+		o, r := fixture(t)
+		result, err := Apply(contextFor(t), o, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.ExpectedGeneration = result.Generation
+		// Existing structural checks see a regular, private journal file;
+		// the read-only preflight must verify the actual journal contract.
+		file := filepath.Join(o.ControlRoot, "state", "journal", "journal.json")
+		if err := os.WriteFile(file, []byte("{broken JSON\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		before := tree(t, o.ControlRoot)
+		wantReason(t, Inspect(contextFor(t), o, r, []byte(globalConfig)), "initialization_recovery_required")
+		if !reflect.DeepEqual(before, tree(t, o.ControlRoot)) {
+			t.Fatal("preflight modified or erased a corrupt retained journal")
+		}
+	})
 	t.Run("missing saved journal must not be called ready", func(t *testing.T) {
 		o, r := fixture(t)
 		result, err := Apply(contextFor(t), o, r)
