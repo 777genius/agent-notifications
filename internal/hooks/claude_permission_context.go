@@ -107,9 +107,9 @@ func claudePermissionRecentTool(session SessionContext) string {
 			if item.Type != "tool_use" || item.ID == "" || completed[item.ID] {
 				continue
 			}
-			if name := safeClaudeToolLabel(item.Name); name != "" {
-				pending[item.ID] = name
-			}
+			// Unknown tools also occupy an in-flight slot. Omitting them
+			// would falsely make a concurrent known tool look unique.
+			pending[item.ID] = safeClaudeToolLabel(item.Name)
 		}
 	}
 	if len(pending) != 1 {
