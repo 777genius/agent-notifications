@@ -569,6 +569,32 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
                 "stale_parallel_fallback": True, "completed_call_correlation": True,
                 "host_message_authoritative": True, "raw_commands_rendered": False}
 
+    def interactive_permission_pair(self):
+        """A question or plan already notified must not emit the generic echo."""
+        old = self.cfg["notifications"]["suppressQuestionAfterAnyNotificationSeconds"]
+        self.cfg["notifications"]["suppressQuestionAfterAnyNotificationSeconds"] = 12
+        write_json(self.config_path, self.cfg)
+        try:
+            for tool, status, message in (
+                    ("AskUserQuestion", "question", "Question"),
+                    ("ExitPlanMode", "plan_ready", "Plan")):
+                session = "TEST-permission-pair-" + tool
+                self.emit("PreToolUse", session, status, message,
+                          fields={"tool_name": tool})
+                count = len(self.sink.snapshot())
+                wire = self.payload("Notification", session,
+                                    notification_type="permission_prompt",
+                                    message="Claude needs your permission")
+                self.success(self.run(self.command("Notification"),
+                                      json.dumps(wire).encode()))
+                require(len(self.sink.snapshot()) == count,
+                        tool + " emitted a duplicate permission webhook")
+            return {"paired_interactive_types": 2, "duplicate_webhooks": 0,
+                    "hook_processes": 4, "prior_webhooks": 2}
+        finally:
+            self.cfg["notifications"]["suppressQuestionAfterAnyNotificationSeconds"] = old
+            write_json(self.config_path, self.cfg)
+
     def interactive(self, tool, status, message, session):
         """Verify tool notification delivery and the persisted interactive state."""
         self.emit("PreToolUse", session, status, message, fields={"tool_name": tool})
@@ -798,6 +824,7 @@ Set-Acl -LiteralPath $env:CLAUDE_SDK_TEST_LAB -AclObject $acl
                 fields={"notification_type": "permission_prompt", "message": "Fixture permission needed"}))
             self.check("Notification_generic_recent_tool_from_transcript", self.generic_permission_context)
             self.check("Notification_generic_transcript_ambiguity_e2e", self.permission_transcript_ambiguity)
+            self.check("Notification_interactive_question_and_plan_pair_no_duplicate_e2e", self.interactive_permission_pair)
             self.check("Stop_message_installed_and_actual_wrapper_argv", lambda: self.emit(
                 "Stop", "TEST-stop", "task_complete", "Stop fixture complete.", trace=True,
                 fields={"last_assistant_message": "Stop fixture complete."}))
