@@ -102,20 +102,12 @@ func inspectProvisionContinuation(ctx context.Context, o Options, s installrunti
 		return fail("initialization_recovery_required",
 			fmt.Errorf("expected owned setup state is absent; preserve ownership evidence"))
 	}
-	staged, err := os.Open(stage)
-	if err != nil {
-		return fail("initialization_recovery_required", fmt.Errorf("cannot inspect owned staging directory: %w", err))
-	}
-	defer func() { _ = staged.Close() }()
-	opened, err := staged.Stat()
-	if err != nil || !os.SameFile(stageInfo, opened) {
+	// Use the same persisted-directory identity authority as provision.
+	// On Darwin a remount may renumber the device; comparing serialized
+	// strings directly would refuse a legitimate interrupted setup.
+	if err := inspectPersistedStageIdentity(root, owner.DirectoryID); err != nil {
 		return fail("initialization_recovery_required",
-			fmt.Errorf("provisioning stage changed while being inspected"))
-	}
-	actualID, err := directoryID(staged)
-	if err != nil || actualID != owner.DirectoryID {
-		return fail("initialization_recovery_required",
-			fmt.Errorf("provisioning stage is not the durably owned directory"))
+			fmt.Errorf("provisioning stage is not the durably owned directory: %w", err))
 	}
 	// Only a fully staged journal may progress under Apply's exclusive locks,
 	// identity checks and namespace comparison. No journal.Open/Initialize in
