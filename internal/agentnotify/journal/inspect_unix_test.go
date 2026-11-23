@@ -4,6 +4,7 @@ package journal
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,7 +47,20 @@ func TestInspectReadOnlyRejectsCorruptOrNonCanonicalJournal(t *testing.T) {
 		change func([]byte) []byte
 	}{
 		{"corrupt json", func([]byte) []byte { return []byte("{bad\n") }},
-		{"noncanonical json", func(data []byte) []byte { return append(append([]byte{}, data...), ' ') }},
+		{"noncanonical json key order", func(data []byte) []byte {
+			var keys map[string]json.RawMessage
+			if err := json.Unmarshal(data, &keys); err != nil {
+				panic(err)
+			}
+			// Encoding a map sorts keys alphabetically, unlike the defined
+			// journal disk struct. It remains valid JSON but changes canonical
+			// field order, which journal.Open must reject identically.
+			out, err := json.Marshal(keys)
+			if err != nil {
+				panic(err)
+			}
+			return out
+		}},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
 			s, clock := fixture(t, Limits{})
