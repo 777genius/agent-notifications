@@ -133,8 +133,12 @@ func claudePermissionRecentTool(session SessionContext) string {
 		// earlier tool_use even when both occur in one model turn.
 		for _, item := range blocks {
 			if item.Type == "tool_result" {
+				// In a reverse scan, an already-seen use is later than this
+				// result. An impossible ordering cannot resolve a future call.
+				if seenUses[item.ToolUseID] {
+					return ""
+				}
 				completed[item.ToolUseID] = true
-				delete(pending, item.ToolUseID)
 			}
 		}
 		if record.Type != "assistant" {

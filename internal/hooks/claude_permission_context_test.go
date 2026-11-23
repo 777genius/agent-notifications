@@ -122,6 +122,15 @@ func TestClaudePermissionRecentToolRequiresUniqueFreshUnresolvedRecord(t *testin
 			t.Fatalf("duplicate tool_use ID in one record produced false unique permission: %q", name)
 		}
 	})
+	t.Run("result before use cannot erase a future competing call", func(t *testing.T) {
+		s := writeClaudePermissionFixture(t, "test-result-before-use",
+			claudeToolResultRecord("test-result-before-use", "call-bash", now.Add(-time.Second)),
+			claudeToolRecord("test-result-before-use", "call-bash", "Bash", now),
+			claudeToolRecord("test-result-before-use", "call-edit", "Edit", now))
+		if name := claudePermissionRecentTool(s); name != "" {
+			t.Fatalf("earlier result erased later competing tool: %q", name)
+		}
+	})
 	t.Run("unknown concurrent tool prevents a false single match", func(t *testing.T) {
 		s := writeClaudePermissionFixture(t, "test-unknown",
 			claudeToolRecord("test-unknown", "call-1", "Bash", now),
