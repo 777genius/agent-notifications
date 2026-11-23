@@ -31,6 +31,21 @@ type Server struct {
 	focusCtx   map[uint32]FocusHints
 	focusCtxMu sync.RWMutex
 
+	// Replaceable notifications: session id -> id of that session's live
+	// notification, passed as replaces_id on the session's next one. Kept in
+	// memory only, so a daemon restart starts every session afresh.
+	replaceIDs   map[string]uint32
+	replaceIDsMu sync.Mutex
+	// replaceLocks serialize lookup, send and record per session, so two
+	// concurrent first notifications of one session cannot both be new.
+	replaceLocks map[string]*sync.Mutex
+	// Notification IDs belong to one D-Bus service owner, not to the daemon.
+	// Serializing replaceable sends prevents concurrent sessions from
+	// restoring stale IDs across a service restart.
+	replaceSendMu      sync.Mutex
+	replaceOwner       string
+	replaceOwnerLookup func(context.Context) (string, bool)
+
 	// Idle timeout for auto-shutdown
 	idleTimeout  time.Duration
 	lastActivity time.Time
@@ -67,6 +82,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		conn:         conn,
 		startTime:    time.Now(),
 		focusCtx:     make(map[uint32]FocusHints),
+		replaceIDs:   make(map[string]uint32),
 		idleTimeout:  cfg.IdleTimeout,
 		lastActivity: time.Now(),
 		done:         make(chan struct{}),
@@ -82,6 +98,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("failed to create notifier: %w", err)
 	}
 	s.notifier = notifier
+	s.replaceOwnerLookup = s.notificationServiceOwner
 
 	return s, nil
 }
@@ -215,8 +232,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	case MessageTypePing:
 		resp.Ping = &PingResponse{
-			Version: ProtocolVersion,
-			Uptime:  int64(time.Since(s.startTime).Seconds()),
+			Version:      ProtocolVersion,
+			Uptime:       int64(time.Since(s.startTime).Seconds()),
+			Capabilities: []string{CapabilityNoFocus},
 		}
 
 	case MessageTypeStop:
@@ -286,19 +304,45 @@ func (s *Server) handleNotification(req *NotifyRequest, strict bool) (*NotifyRes
 		},
 	}
 
-	if !strict || strictAllowed {
+	focus := (strict && strictAllowed) || (!strict && !req.NoFocus)
+	if focus {
 		n.Actions = []notify.Action{{Key: "default", Label: "Focus Terminal"}}
+	}
+	replaceKey := ""
+	if !strict {
+		replaceKey = req.ReplaceKey
+	}
+	if replaceKey != "" {
+		// Keep owner validation, send and cache update together across sessions.
+		s.replaceSendMu.Lock()
+		defer s.replaceSendMu.Unlock()
+		unlock := s.lockReplaceKey(replaceKey)
+		defer unlock()
+		s.refreshReplaceOwner()
+		n.ReplacesID = s.replaceID(replaceKey)
 	}
 
 	// Send notification
 	id, err := s.notifier.SendNotification(n)
 	if err != nil {
+		if replaceKey != "" {
+			s.forgetReplaceKey(replaceKey)
+		}
 		return nil, fmt.Errorf("failed to send notification: %w", err)
+	}
+	if replaceKey != "" {
+		s.rememberReplaceID(replaceKey, id)
 	}
 
 	// A strict callback owns only its verified snapshot. Legacy focus
 	// paths retain their unchanged hints, without new agent authority.
-	if !strict || strictAllowed {
+	if !focus && n.ReplacesID != 0 {
+		// The replaced notification's click target must not outlive it.
+		s.focusCtxMu.Lock()
+		delete(s.focusCtx, id)
+		s.focusCtxMu.Unlock()
+	}
+	if focus {
 		hints := FocusHints{
 			TerminalName: focusTarget, FolderName: req.FocusFolder,
 			ProjectPath: req.FocusProjectPath, IDEPID: req.FocusIDEPID,
@@ -425,8 +469,98 @@ func (s *Server) listenStrictActions(ready chan<- struct{}) {
 	}
 }
 
+// lockReplaceKey holds key's send lock until the returned func is called.
+func (s *Server) lockReplaceKey(key string) func() {
+	s.replaceIDsMu.Lock()
+	if s.replaceLocks == nil {
+		s.replaceLocks = make(map[string]*sync.Mutex)
+	}
+	lock, ok := s.replaceLocks[key]
+	if !ok {
+		lock = &sync.Mutex{}
+		s.replaceLocks[key] = lock
+	}
+	s.replaceIDsMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+// refreshReplaceOwner drops all old IDs when the unique D-Bus owner changes
+// or cannot be established. Fail safe with a new banner, never overwrite a
+// different session's notification after a desktop service restart.
+func (s *Server) refreshReplaceOwner() {
+	if s.replaceOwnerLookup == nil { // Only test servers omit a real D-Bus connection.
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	owner, ok := s.replaceOwnerLookup(ctx)
+	if !ok || len(owner) < 2 || owner[0] != ':' {
+		owner = ""
+	}
+	s.replaceIDsMu.Lock()
+	changed := owner == "" || owner != s.replaceOwner
+	if changed {
+		clear(s.replaceIDs)
+	}
+	s.replaceOwner = owner
+	s.replaceIDsMu.Unlock()
+	if changed {
+		// Preserve strict click targets verified against the current owner,
+		// including those created before the first replacement request.
+		// Unverified or previous-owner targets may refer to recycled IDs.
+		s.focusCtxMu.Lock()
+		for id, hints := range s.focusCtx {
+			if owner == "" || hints.Strict == nil || hints.StrictOwner != owner {
+				delete(s.focusCtx, id)
+			}
+		}
+		s.focusCtxMu.Unlock()
+	}
+}
+
+// replaceID returns the id of the live notification that key's next
+// notification replaces, or 0 when there is none.
+func (s *Server) replaceID(key string) uint32 {
+	s.replaceIDsMu.Lock()
+	defer s.replaceIDsMu.Unlock()
+	return s.replaceIDs[key]
+}
+
+// rememberReplaceID records id as key's live notification. Per the
+// freedesktop spec a replacement returns the replaced id, but a server that
+// ignores replaces_id returns a new one; the newest id is the one to replace.
+func (s *Server) rememberReplaceID(key string, id uint32) {
+	s.replaceIDsMu.Lock()
+	defer s.replaceIDsMu.Unlock()
+	if s.replaceIDs == nil {
+		s.replaceIDs = make(map[string]uint32)
+	}
+	s.replaceIDs[key] = id
+}
+
+// forgetReplaceKey makes key's next notification a new one.
+func (s *Server) forgetReplaceKey(key string) {
+	s.replaceIDsMu.Lock()
+	defer s.replaceIDsMu.Unlock()
+	delete(s.replaceIDs, key)
+}
+
+// forgetReplaceID drops every key whose live notification is id. A closed
+// notification cannot be replaced, so the session's next one is new.
+func (s *Server) forgetReplaceID(id uint32) {
+	s.replaceIDsMu.Lock()
+	defer s.replaceIDsMu.Unlock()
+	for key, live := range s.replaceIDs {
+		if live == id {
+			delete(s.replaceIDs, key)
+		}
+	}
+}
+
 // onNotificationClosed is called when a notification is closed
 func (s *Server) onNotificationClosed(sig *notify.NotificationClosedSignal) {
+	s.forgetReplaceID(sig.ID)
 	s.focusCtxMu.Lock()
 	hints, exists := s.focusCtx[sig.ID]
 	if !exists || hints.Strict == nil {
