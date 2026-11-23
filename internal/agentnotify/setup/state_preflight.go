@@ -138,19 +138,18 @@ func inspectProvisionContinuation(ctx context.Context, o Options, s installrunti
 	return inspectInitializedJournal(ctx, o, stage, owner.Namespace)
 }
 
-// journal.Open is a read-only transaction: it uses the existing lock, parses
-// canonical bounded records, validates the namespace, and does not create or
-// repair the journal. A structural check alone can call a corrupt journal
-// "ready" and cause a later enable failure (#585).
+// InspectReadOnly uses the existing canonical journal decoder but takes no
+// journal lock, writes no files, and never resets history. A structural check
+// alone could call a corrupt journal "ready" before enable (#585).
 func inspectInitializedJournal(ctx context.Context, o Options, state, expectedNamespace string) error {
-	store, err := journal.Open(ctx, journal.Options{
+	namespace, err := journal.InspectReadOnly(ctx, journal.Options{
 		Root: filepath.Join(state, "journal"), Clock: o.JournalClock,
 	})
 	if err != nil {
 		return fail("initialization_recovery_required",
 			fmt.Errorf("persisted setup journal is unreadable or inconsistent; preserve it for recovery: %w", err))
 	}
-	if expectedNamespace != "" && store.Namespace() != expectedNamespace {
+	if expectedNamespace != "" && namespace != expectedNamespace {
 		return fail("initialization_recovery_required",
 			fmt.Errorf("persisted setup journal namespace does not match ownership"))
 	}
