@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -117,5 +119,24 @@ func TestGitMetadataContextIgnoresInheritedRepoSelection(t *testing.T) {
 	}
 	if got := GetGitMetadata(wanted); got.Branch != "wanted-branch" || got.CommitHash == "" {
 		t.Fatalf("legacy metadata from wrong repo: %+v", got)
+	}
+}
+
+// Windows treats environment variable names case-insensitively. A mixed-case
+// GIT_DIR must not override the repository selected by the caller\u0027s cwd.
+func TestGitDiscoveryEnvIgnoresMixedCaseOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows environment-key matching")
+	}
+	for _, key := range []string{"Git_Dir", "Git_Work_Tree", "Git_Common_Dir", "Git_Index_File", "Git_Object_Directory", "Git_Alternate_Object_Directories"} {
+		t.Setenv(key, filepath.Join(t.TempDir(), "foreign-git"))
+	}
+	for _, entry := range gitDiscoveryEnv() {
+		key, _, _ := strings.Cut(entry, "=")
+		for _, forbidden := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"} {
+			if strings.EqualFold(key, forbidden) {
+				t.Fatalf("repository override %q retained in git discovery environment", key)
+			}
+		}
 	}
 }
