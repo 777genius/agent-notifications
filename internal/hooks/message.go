@@ -18,7 +18,7 @@ func (h *Handler) generateMessage(ev Event, status analyzer.Status, messages []j
 	if ev.Product == ProductClaude && status == analyzer.StatusPermissionRequest {
 		if p, ok := ev.Payload.(NotificationPayload); ok {
 			if message := strings.Join(strings.Fields(p.Message), " "); message != "" {
-				return truncateRunes(message, 180), ""
+				return claudePermissionBody(message, ev.Session), ""
 			}
 		}
 		return summary.GenerateSimple(status, h.cfg), ""
