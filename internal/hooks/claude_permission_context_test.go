@@ -129,6 +129,33 @@ func TestClaudePermissionRecentToolRequiresUniqueFreshUnresolvedRecord(t *testin
 			}
 		})
 	}
+	t.Run("misplaced tool result cannot falsely resolve another call", func(t *testing.T) {
+		s := writeClaudePermissionFixture(t, "test-wrong-result-role",
+			claudeToolRecord("test-wrong-result-role", "call-bash", "Bash", now),
+			claudeToolRecord("test-wrong-result-role", "call-edit", "Edit", now),
+			map[string]any{"type": "assistant", "sessionId": "test-wrong-result-role",
+				"timestamp": now.Format(time.RFC3339Nano), "message": map[string]any{
+					"role": "assistant", "content": []any{
+						map[string]any{"type": "tool_result", "tool_use_id": "call-bash"},
+					}}},
+		)
+		if name := claudePermissionRecentTool(s); name != "" {
+			t.Fatalf("invalid assistant tool_result erased competing permission: %q", name)
+		}
+	})
+	t.Run("misplaced tool use cannot be silently ignored", func(t *testing.T) {
+		s := writeClaudePermissionFixture(t, "test-wrong-use-role",
+			claudeToolRecord("test-wrong-use-role", "call-bash", "Bash", now),
+			map[string]any{"type": "user", "sessionId": "test-wrong-use-role",
+				"timestamp": now.Format(time.RFC3339Nano), "message": map[string]any{
+					"role": "user", "content": []any{
+						map[string]any{"type": "tool_use", "id": "call-edit", "name": "Edit"},
+					}}},
+		)
+		if name := claudePermissionRecentTool(s); name != "" {
+			t.Fatalf("invalid user tool_use concealed conflicting operation: %q", name)
+		}
+	})
 	t.Run("stale unresolved plus fresh call is ambiguous", func(t *testing.T) {
 		s := writeClaudePermissionFixture(t, "test-stale-parallel",
 			claudeToolRecord("test-stale-parallel", "call-old", "Bash", now.Add(-50*time.Second)),
