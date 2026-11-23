@@ -97,6 +97,21 @@ func inspectProvisionContinuation(o Options, s installruntime.PolicySnapshot, ow
 		return fail("initialization_recovery_required",
 			fmt.Errorf("expected owned setup state is absent; preserve ownership evidence"))
 	}
+	staged, err := os.Open(stage)
+	if err != nil {
+		return fail("initialization_recovery_required", fmt.Errorf("cannot inspect owned staging directory: %w", err))
+	}
+	defer func() { _ = staged.Close() }()
+	opened, err := staged.Stat()
+	if err != nil || !os.SameFile(stageInfo, opened) {
+		return fail("initialization_recovery_required",
+			fmt.Errorf("provisioning stage changed while being inspected"))
+	}
+	actualID, err := directoryID(staged)
+	if err != nil || actualID != owner.DirectoryID {
+		return fail("initialization_recovery_required",
+			fmt.Errorf("provisioning stage is not the durably owned directory"))
+	}
 	// Only a fully staged journal may progress under Apply's exclusive locks,
 	// identity checks and namespace comparison. No journal.Open/Initialize in
 	// the read-only path (they might create files).
