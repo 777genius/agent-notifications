@@ -31,7 +31,7 @@ func claudePermissionRecentTool(session SessionContext) string {
 	if err != nil || !before.Mode().IsRegular() || before.Size() == 0 {
 		return ""
 	}
-	file, err := os.Open(session.TranscriptPath)
+	file, err := openClaudePermissionTranscript(session.TranscriptPath)
 	if err != nil {
 		return ""
 	}
