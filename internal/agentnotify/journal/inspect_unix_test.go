@@ -83,3 +83,34 @@ func TestInspectReadOnlyRejectsCorruptOrNonCanonicalJournal(t *testing.T) {
 		})
 	}
 }
+
+func TestInspectReadOnlyNeverAdoptsHardlinkedSnapshotAcrossReplacement(t *testing.T) {
+	s, clock := fixture(t, Limits{})
+	path := filepath.Join(s.root, "journal.json")
+	linked := path + ".hardlink"
+	if err := os.Link(path, linked); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{Root: s.root, Clock: clock}
+	if _, err := InspectReadOnly(testContext(t), opts); err == nil {
+		t.Fatal("hardlinked journal passed read-only admission")
+	}
+	if err := os.Remove(linked); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := filepath.Join(s.root, "replacement-snapshot.json")
+	if err := os.WriteFile(next, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, path); err != nil {
+		t.Fatal(err)
+	}
+	namespace, err := InspectReadOnly(testContext(t), opts)
+	if err != nil || namespace != s.Namespace() {
+		t.Fatalf("valid atomically replaced snapshot rejected: %q %v", namespace, err)
+	}
+}
