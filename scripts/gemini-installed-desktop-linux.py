@@ -46,6 +46,7 @@ def module(name, path):
 N = module("gemini_desktop_primitives", REPO / "scripts/pi-native-preflight.py")
 G0 = module("gemini_desktop_provider", REPO / "tests/integration/gemini_native_e2e.py")
 G5 = module("gemini_desktop_contracts", REPO / "tests/integration/gemini_notifications_e2e.py")
+X11 = module("gemini_desktop_xres_observer", REPO / "scripts/navigation-linux-portal-callback-probe.py")
 
 
 class Failed(Exception):
@@ -153,6 +154,12 @@ def sdk_projection(raw, cwd):
             "absence_means": "unknown"}
 
 
+def validated_focus_sample(observe, expected):
+    sample = observe()
+    require(sample == expected, "click_focus_receipt_mismatch")
+    return sample
+
+
 def unchanged_focus(observe, expected, seconds=15, now=time.monotonic, pause=time.sleep):
     started, samples = now(), 0
     while True:
@@ -162,6 +169,21 @@ def unchanged_focus(observe, expected, seconds=15, now=time.monotonic, pause=tim
         if elapsed >= seconds:
             return {"seconds": round(elapsed, 3), "samples": samples, "unchanged": True}
         pause(min(0.05, seconds - elapsed))
+
+
+def observe_native_click(desktop, row, expected, positive):
+    desktop.click()
+    # Establish actual native delivery before starting the focus acceptance
+    # window. A delayed action must not arrive after an already-passed receipt.
+    native_notify = desktop.observer.after_click(row)
+    observation = None
+    if positive:
+        N.wait_for(lambda: desktop.focus() == expected,
+                   seconds=8, failure="native_click_did_not_focus_origin")
+    else:
+        observation = unchanged_focus(desktop.focus, expected)
+    observed = validated_focus_sample(desktop.focus, expected)
+    return native_notify, observation, observed
 
 
 def process_record(pid):
@@ -251,6 +273,8 @@ class Installation:
         self.options = SimpleNamespace(binary=str(args.candidate), desktop=True, native_app=None)
         self.executable = args.candidate
         self.registered = False
+        self.install_attempted = False
+        self.cleanup_attempts = []
         self.candidate_hash = sha(args.candidate)
 
     def status(self):
@@ -286,6 +310,8 @@ class Installation:
         return {"before": generation(before), "after": generation(after), "enabled": enable}
 
     def install(self):
+        # A failed transaction may already have changed managed state.
+        self.install_attempted = True
         G5.setup(G0, self.options, self.root, self.env, "install")
         self.registered = True
         snapshot, settings = G5.snapshot(self.root, self.candidate_hash)
@@ -304,10 +330,27 @@ class Installation:
         return self.change(True)
 
     def remove(self):
-        self.change(False)
-        G5.setup(G0, self.options, self.root, self.env, "remove")
-        G5.inspect(G0, self.options, self.root, self.env, False)
-        self.registered = False
+        # Each supported cleanup step has its own bounded subprocesses. A
+        # failed disable (including partial initialization) must not skip
+        # removal, and a failed removal must not skip the absence inspection.
+        self.cleanup_attempts = []
+        for stage, operation in (
+                ("disable", lambda: self.change(False)),
+                ("remove", lambda: G5.setup(G0, self.options, self.root, self.env, "remove")),
+                ("inspect_absent", lambda: G5.inspect(G0, self.options, self.root, self.env, False))):
+            result = {"stage": stage, "status": "failed"}
+            self.cleanup_attempts.append(result)
+            try:
+                operation()
+            except Exception as error:
+                result["error"] = failure_code(error)
+            else:
+                result["status"] = "passed"
+                if stage == "inspect_absent":
+                    self.registered = False
+                    self.install_attempted = False
+        require(all(item["status"] == "passed" for item in self.cleanup_attempts),
+                "managed_cleanup_failed")
 
 
 def source_identity(args, env):
@@ -374,7 +417,7 @@ class NotifyObserver:
         from gi.repository import GLib
         DBusGMainLoop(set_as_default=True)
         self.dbus, self.context = dbus, GLib.MainContext.default()
-        self.connections, self.calls, self.actions, self.error = [], [], [], None
+        self.connections, self.calls, self.actions, self.closed, self.error = [], [], [], [], None
         self.dunst, self.daemon = dunst, daemon
         self.daemon_identity = process_record(daemon.pid)
         try:
@@ -396,7 +439,9 @@ class NotifyObserver:
             rules = ["type='method_call',interface='org.freedesktop.Notifications',member='Notify'",
                      "type='method_return',sender='" + self.owner + "'",
                      "type='signal',sender='" + self.owner
-                     + "',interface='org.freedesktop.Notifications',member='ActionInvoked'"]
+                     + "',interface='org.freedesktop.Notifications',member='ActionInvoked'",
+                     "type='signal',sender='" + self.owner
+                     + "',interface='org.freedesktop.Notifications',member='NotificationClosed'"]
             # Synchronous acknowledgement establishes subscription readiness.
             monitoring.BecomeMonitor(dbus.Array(rules, signature="s"), dbus.UInt32(0), timeout=3)
         except Exception:
@@ -438,6 +483,16 @@ class NotifyObserver:
                         and len(args) == 2 and str(args[1]) == "default",
                         "unexpected_native_action_signal")
                 self.actions.append({"id": int(args[0]), "destination": message.get_destination()})
+            elif (kind == self.dbus.lowlevel.MESSAGE_TYPE_SIGNAL and sender == self.owner
+                  and message.get_interface() == "org.freedesktop.Notifications"
+                  and message.get_member() == "NotificationClosed"):
+                args = message.get_args_list()
+                require(len(self.closed) < 16 and str(message.get_signature()) == "uu"
+                        and message.get_path() == "/org/freedesktop/Notifications"
+                        and len(args) == 2 and 0 < int(args[0]) < 2**32
+                        and int(args[1]) in (1, 2, 3, 4), "unexpected_native_close_signal")
+                self.closed.append({"id": int(args[0]), "reason": int(args[1]),
+                                    "destination": message.get_destination()})
         except Exception as error:
             self.error = failure_code(error)
         # Consume monitored calls without dispatching or replying on this
@@ -476,9 +531,12 @@ class NotifyObserver:
                     "strict_notification_not_from_owned_product_daemon")
         require(not any(action["id"] == row["id"] for action in self.actions),
                 "native_action_preceded_x11_click")
+        require(not any(event["id"] == row["id"] for event in self.closed),
+                "native_banner_closed_before_x11_click")
         return row
 
     def after_click(self, row):
+        dismissal = None
         def events():
             self.pump()
             return [event for event in self.actions if event["id"] == row["id"]]
@@ -488,11 +546,28 @@ class NotifyObserver:
             require(len(observed) == 1 and observed[0]["destination"] in (None, row["sender"]),
                     "real_dunst_action_destination_mismatch")
         else:
+            def dismissals():
+                self.pump()
+                return [event for event in self.closed if event["id"] == row["id"]]
+            # The TEST server's ordinary left binding performs do_action and
+            # close_current. With no action, only a real user-dismissed close
+            # proves the click reached this banner. Expiry/DBus closure cannot.
+            # This check precedes history(), which itself calls close-all.
+            N.wait_for(lambda: bool(dismissals()), seconds=3,
+                       failure="informational_click_delivery_not_observed")
+            dismissed = dismissals()
+            require(len(dismissed) == 1 and dismissed[0]["reason"] == 2
+                    and dismissed[0]["destination"] == row["sender"],
+                    "informational_click_not_owned_user_dismissal")
+            dismissal = {"notification_id": dismissed[0]["id"], "reason": dismissed[0]["reason"]}
             require(not events(), "informational_banner_emitted_action")
         row["finished"] = True
         return {"notification_id": row["id"], "default_action_present_before_mutation": row["default_action"],
                 "product_daemon_sender_verified": row["default_action"],
                 "authentic_dunst_action_observed": row["default_action"],
+                "informational_user_dismissal_observed": not row["default_action"],
+                "native_user_dismissal": dismissal,
+                "native_click_delivery": "ActionInvoked" if row["default_action"] else "NotificationClosed_reason_2",
                 "Notify_reply_id_joined": True}
 
     def complete(self):
@@ -511,14 +586,32 @@ class NotifyObserver:
         require(not errors, "native_monitor_connection_close_failed")
 
 
+class GeminiDesktopLab(N.Lab):
+    """Configure only this owned Dunst before its first process starts."""
+    def start(self, argv):
+        if Path(argv[0]).name == "dunst":
+            config = self.root / "dunstrc"
+            require(len(argv) == 3 and argv[1] == "-config" and Path(argv[2]) == config
+                    and config.is_file() and not config.is_symlink(), "owned_dunst_config_required")
+            old = config.read_text()
+            original = "mouse_left_click = do_action\n"
+            require(old.count(original) == 1, "owned_dunst_binding_mismatch")
+            config.write_text(old.replace(original, "mouse_left_click = do_action, close_current\n"))
+            self.report["dunst_left_click"] = ["do_action", "close_current"]
+        return super().start(argv)
+
+
 class Desktop:
-    def __init__(self, lab, paths, distractor):
+    def __init__(self, lab, paths, distractor, window_owner):
         self.lab, self.paths, self.distractor = lab, paths, distractor
+        self.window_owner = window_owner
         self.distractor_pid = self.window_pid(distractor)
         daemons = [child for child in lab.children
                    if Path(child.args[0]).resolve() == Path(paths["dunst"]).resolve()]
         require(len(daemons) == 1, "owned_banner_server_missing")
         self.banner_server = daemons[0]
+        self.banner_server_identity = process_record(self.banner_server.pid)
+        require(self.banner_server_identity is not None, "owned_banner_server_identity_missing")
 
     def x(self, *args):
         return self.lab.run([self.paths["xdotool"], *args], timeout=5)[0].strip()
@@ -571,7 +664,9 @@ class Desktop:
         pointer = dict(line.split("=", 1) for line in self.x("getmouselocation", "--shell").splitlines())
         window = pointer.get("WINDOW", "")
         require(window.isascii() and window.isdecimal() and int(window) > 0
-                and self.window_pid(window) == self.banner_server.pid,
+                and still_present(self.banner_server_identity)
+                and self.window_owner.pid(window) == self.banner_server.pid
+                and self.banner_server.poll() is None,
                 "click_pointer_not_over_owned_banner")
         self.x("click", "1")
 
@@ -677,15 +772,9 @@ def run_case(name, args, root, installation, provider, desktop, report):
             require(not still_present(terminal_record) and terminal.poll() == 0, "stale_origin_still_alive")
         progress["phase"] = "native_banner_click"
         require(desktop.focus() == expected, "focus_changed_before_click")
-        desktop.click()
-        observation = None
-        if name == "positive":
-            N.wait_for(lambda: desktop.focus() == {"window": origin, "keyboard_pid": terminal.pid},
-                       seconds=8, failure="native_click_did_not_focus_origin")
-        else:
-            observation = unchanged_focus(desktop.focus, expected)
-        observed = desktop.focus()
-        native_notify = desktop.observer.after_click(native_call)
+        native_notify, observation, observed = observe_native_click(
+            desktop, native_call, {"window": origin, "keyboard_pid": terminal.pid}
+            if name == "positive" else expected, name == "positive")
         desktop.history()
         if terminal.poll() is None:
             desktop.quit(terminal, origin, nodes)
@@ -704,7 +793,10 @@ def run_case(name, args, root, installation, provider, desktop, report):
         report["cases"].append({"case": name, "status": "passed", "actual_cli_mode": "interactive_TUI",
             "provider_stream_calls": stream_calls, "native_hook": sdk, "native_notify": native_notify,
             "product_webhooks": 1, "banner_observed": True, "banner_sha256": sha(screenshot),
-            "click_input": "xdotool_X11_XTest", "pointer_over_owned_banner": True,
+            "click_input": "xdotool_X11_XTest", "mouse_button": 1,
+            "pointer_over_owned_banner": True, "banner_owner_observer": "XRes_1.2_local_client_PID",
+            "native_click_delivery_verified": True,
+            "focus_observation_anchor": "native_click_delivery_observed",
             "origin_window": origin, "origin_xterm_pid": terminal.pid,
             "origin_cli_pids": [node["pid"] for node in nodes],
             "foreground_after_click": observed, "unchanged_focus_observation": observation,
@@ -763,7 +855,7 @@ def run(args):
                                 "model_provider": "bounded_localhost_HTTP_substitute",
                                 "sound": "disabled_not_qualified"}}
     outer = root = lab = provider = installation = None
-    observer = None
+    observer = window_owner = None
     prior_subreaper, libc, subreaper_set = ctypes.c_int(), None, False
     baseline = set()
     try:
@@ -788,18 +880,24 @@ def run(args):
                       hook_shell_sha256=sha(args.hook_shell),
                       cli=G0.cli_identity(args.gemini_executable, args.cli_install_root, args.gemini_version),
                       fixture_sha256={path: sha(REPO / path) for path in
-                          ("scripts/pi-native-preflight.py", "tests/integration/gemini_native_e2e.py",
+                          ("scripts/pi-native-preflight.py", "scripts/navigation-linux-portal-callback-probe.py",
+                           "tests/integration/gemini_native_e2e.py",
                            "tests/integration/gemini_notifications_e2e.py")})
         fixture_settings(root, args)
         desktop_root = outer / "desktop"
         desktop_root.mkdir(mode=0o700)
-        lab = N.Lab(desktop_root, {})
+        lab = GeminiDesktopLab(desktop_root, {})
         libc = ctypes.CDLL(None, use_errno=True)
         baseline = {(row["pid"], row["birth"]) for row in children(os.getpid())}
         require(libc.prctl(37, ctypes.byref(prior_subreaper), 0, 0, 0) == 0
                 and libc.prctl(36, 1, 0, 0, 0) == 0, "owned_child_collection_unavailable")
         subreaper_set = True
         paths, _, windows = N.linux_desktop(lab, terminal_lifetime=600)
+        window_owner = X11.XResWindowOwner(lab.env["DISPLAY"])
+        report["native_window_owner"] = {"api": "XRes_local_client_PID",
+                                        "version": window_owner.version,
+                                        "owned_unmapped_window_self_check": True}
+        report["dunst_left_click"] = lab.report["dunst_left_click"]
         report["desktop_tools"] = {name: lab.report["tools"][name] for name in
                                    ("Xvfb", "openbox", "dunst", "xterm", "xdotool", "dbus-daemon", "ffmpeg")}
         env.update({key: lab.env[key] for key in
@@ -839,7 +937,7 @@ def run(args):
                 "owned_product_daemon_identity_mismatch")
         report["daemon"] = {"explicit_foreground_start": True, "owned_pid": daemon.pid,
                             "installed_binary_sha256": report["installed_binary_sha256"]}
-        desktop = Desktop(lab, paths, windows[-1])
+        desktop = Desktop(lab, paths, windows[-1], window_owner)
         observer = NotifyObserver(env["DBUS_SESSION_BUS_ADDRESS"], desktop.banner_server, daemon)
         desktop.observer = observer
         report["native_notify_observer"] = "readonly_typed_BecomeMonitor_on_owned_bus"
@@ -859,12 +957,20 @@ def run(args):
                 report["native_monitor_connections_closed"] = True
             except Exception as error:
                 cleanup_errors.append(failure_code(error))
-        if installation and installation.registered:
+        if window_owner:
+            try:
+                window_owner.close()
+                report["native_window_owner_closed"] = True
+            except Exception as error:
+                cleanup_errors.append(failure_code(error))
+        if installation and (installation.registered or installation.install_attempted):
             try:
                 installation.remove()
                 report["managed_cleanup"] = "disabled_and_removed"
             except Exception as error:
                 cleanup_errors.append(failure_code(error))
+            finally:
+                report["managed_cleanup_attempts"] = installation.cleanup_attempts
         if provider and provider.server:
             try:
                 provider.__exit__(None, None, None)
@@ -889,6 +995,7 @@ def run(args):
                 cleanup_errors.append("subreaper_restore_failed")
         clean = (not cleanup_errors and report.get("owned_direct_children_collected") is True
                  and report.get("native_monitor_connections_closed") is True
+                 and report.get("native_window_owner_closed") is True
                  and report.get("provider_thread_collected") is True
                  and report.get("managed_cleanup") == "disabled_and_removed")
         report["owned_children_collected"] = clean

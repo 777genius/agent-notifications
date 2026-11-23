@@ -102,21 +102,26 @@ Ubuntu job must pass the real directory identity/swap, Cursor, materializer,
 caller and recovery contracts on that kernel. `NOT_RUN` remains a CI failure;
 this source qualification grants no installed native E or consent.
 
-### AWS kernel qualification candidate
+### AWS kernel source qualification
 
-The proposed `7.0.0-1014-aws` entry has its own
+The `7.0.0-1014-aws` entry has its own
 `source-ci-aws-20261123` identity. It cannot inherit either Azure receipt.
 The kernel policy and identity mapping admit only this exact new string;
 neighboring versions, another provider suffix and extra characters remain
 refused. An unknown kernel also receives no source evidence identity.
 
-Acceptance is pending a complete `cursor-physical` result on an actual
+Acceptance requires a complete `cursor-physical` result on an actual
 Ubuntu 24.04.5/Linux amd64 host with this AWS kernel: directory identity/swap,
 original-token revalidation, selected projection/acknowledgement/data,
 positive materializer, caller handoff and matching recovery, and package cleanup.
 The existing job commands, positive markers, `NOT_RUN` failures, ext4 ancestry
 checks and installed-native/consent boundaries are unchanged. A passing Azure
 run cannot qualify the AWS entry.
+
+The source-bound AWS results and review are tracked in
+[PR 682](https://github.com/777genius/agent-notifications/pull/682). Its acceptance
+checklist requires the complete measurement before merge; an entry in this
+source policy alone is not evidence that the measurement passed.
 
 Both attempts of the unchanged source `06734f7` reached the new AWS tuple and
 refused the positive materializer at its kernel guard

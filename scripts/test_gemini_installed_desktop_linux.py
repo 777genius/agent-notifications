@@ -75,6 +75,150 @@ class FocusTests(unittest.TestCase):
                               pause=lambda value: clock.__setitem__(0, clock[0] + value))
 
 
+    def test_positive_receipt_rejects_focus_changed_after_successful_wait(self):
+        expected = {"window": "1", "keyboard_pid": 2}
+        for changed in ({"window": "3", "keyboard_pid": 2},
+                        {"window": "1", "keyboard_pid": 4}):
+            reads = iter([dict(expected), changed])
+            with self.subTest(changed=changed):
+                self.assertTrue(D.N.wait_for(lambda: next(reads) == expected, seconds=1))
+                with self.assertRaisesRegex(D.Failed, "click_focus_receipt_mismatch"):
+                    D.validated_focus_sample(lambda: next(reads), expected)
+
+    def test_negative_receipt_rejects_change_after_full_observation_window(self):
+        clock, completed = [0.0], [False]
+        expected = {"window": "1", "keyboard_pid": 2}
+        def observe():
+            if completed[0]:
+                return {"window": "3", "keyboard_pid": 4}
+            completed[0] = clock[0] >= 15
+            return dict(expected)
+        result = D.unchanged_focus(observe, expected, seconds=15,
+                                  now=lambda: clock[0],
+                                  pause=lambda value: clock.__setitem__(0, clock[0] + value))
+        self.assertGreaterEqual(result["seconds"], 15)
+        with self.assertRaisesRegex(D.Failed, "click_focus_receipt_mismatch"):
+            D.validated_focus_sample(observe, expected)
+
+    def test_negative_window_starts_after_native_delivery(self):
+        clock, proof_at, observations = [0.0], [], []
+        expected = {"window": "1", "keyboard_pid": 2}
+        def delivered(row):
+            clock[0] += 7
+            proof_at.append(clock[0])
+            return {"native_click_delivery": "observed"}
+        def focus():
+            observations.append(clock[0])
+            return dict(expected)
+        desktop = SimpleNamespace(click=lambda: None, focus=focus,
+                                  observer=SimpleNamespace(after_click=delivered))
+        unchanged = D.unchanged_focus
+        def monitor(observe, wanted):
+            return unchanged(observe, wanted, now=lambda: clock[0],
+                             pause=lambda value: clock.__setitem__(0, clock[0] + value))
+        with patch.object(D, "unchanged_focus", side_effect=monitor):
+            _, period, final = D.observe_native_click(desktop, {}, expected, False)
+        self.assertGreaterEqual(period["seconds"], 15)
+        self.assertGreaterEqual(observations[0], proof_at[0])
+        self.assertGreaterEqual(clock[0] - proof_at[0], 15)
+        self.assertEqual(final, expected)
+
+    def test_late_native_action_with_wrong_focus_cannot_follow_a_passed_receipt(self):
+        expected = {"window": "1", "keyboard_pid": 2}
+        current, clock = [dict(expected)], [0.0]
+        def delivered(row):
+            current[0] = {"window": "3", "keyboard_pid": 4}
+            return {"native_click_delivery": "observed"}
+        desktop = SimpleNamespace(click=lambda: None, focus=lambda: current[0],
+                                  observer=SimpleNamespace(after_click=delivered))
+        unchanged = D.unchanged_focus
+        def monitor(observe, wanted):
+            return unchanged(observe, wanted, now=lambda: clock[0],
+                             pause=lambda value: clock.__setitem__(0, clock[0] + value))
+        with patch.object(D, "unchanged_focus", side_effect=monitor):
+            with self.assertRaisesRegex(D.Failed, "negative_click_changed_focus"):
+                D.observe_native_click(desktop, {}, expected, False)
+
+
+class ManagedCleanupTests(unittest.TestCase):
+    def installation(self):
+        obj = object.__new__(D.Installation)
+        obj.root, obj.executable = Path("/TEST"), Path("/TEST/candidate")
+        obj.env, obj.selected = {}, Path("/TEST/config.json")
+        obj.options = SimpleNamespace(binary=str(obj.executable), desktop=True, native_app=None)
+        obj.candidate_hash = "candidate"
+        obj.registered = obj.install_attempted = True
+        obj.cleanup_attempts = []
+        return obj
+
+    def test_partial_initialization_does_not_skip_supported_remove(self):
+        obj = self.installation()
+        self.assertFalse(hasattr(obj, "settings_hash"))
+        after = {"generation": 11, "explicitIntent": False, "runtimeEligible": False}
+        policy = {"enabled": False, "route": {"geminiNotifications": {"desktop": True, "webhook": True}}}
+        with patch.object(obj, "status", side_effect=[{"generation": 7}, after]), \
+             patch.object(D, "json_command", return_value=dict(after, reason="disabled")), \
+             patch.object(D.G5, "snapshot", return_value=({"policy": policy, "settings_sha256": "settings"}, {})), \
+             patch.object(D.G5, "setup") as remove, patch.object(D.G5, "inspect") as inspect:
+            with self.assertRaisesRegex(D.Failed, "managed_cleanup_failed"):
+                obj.remove()
+        remove.assert_called_once_with(D.G0, obj.options, obj.root, obj.env, "remove")
+        inspect.assert_called_once_with(D.G0, obj.options, obj.root, obj.env, False)
+        self.assertEqual(obj.cleanup_attempts, [
+            {"stage": "disable", "status": "failed", "error": "unexpected_AttributeError"},
+            {"stage": "remove", "status": "passed"},
+            {"stage": "inspect_absent", "status": "passed"}])
+        self.assertFalse(obj.registered or obj.install_attempted)
+
+    def test_failed_install_transaction_still_requires_cleanup(self):
+        obj = self.installation()
+        obj.registered = obj.install_attempted = False
+        with patch.object(D.G5, "setup", side_effect=D.Failed("partial_install_failure")):
+            with self.assertRaisesRegex(D.Failed, "partial_install_failure"):
+                obj.install()
+        self.assertFalse(obj.registered)
+        self.assertTrue(obj.install_attempted)
+        with patch.object(obj, "change", side_effect=D.Failed("policy_unavailable")), \
+             patch.object(D.G5, "setup") as remove, patch.object(D.G5, "inspect") as inspect:
+            with self.assertRaisesRegex(D.Failed, "managed_cleanup_failed"):
+                obj.remove()
+        remove.assert_called_once_with(D.G0, obj.options, obj.root, obj.env, "remove")
+        inspect.assert_called_once_with(D.G0, obj.options, obj.root, obj.env, False)
+        self.assertFalse(obj.registered or obj.install_attempted)
+
+    def test_remove_and_inspection_failures_are_independent_and_fatal(self):
+        for remove_error, inspect_error in (
+                (D.Failed("remove_transaction_failed"), None),
+                (None, D.Failed("absence_not_verified")),
+                (OSError("PRIVATE subprocess output"), D.Failed("absence_not_verified"))):
+            obj = self.installation()
+            with self.subTest(remove=type(remove_error).__name__, inspect=type(inspect_error).__name__), \
+                 patch.object(obj, "change", return_value={"enabled": False}) as disable, \
+                 patch.object(D.G5, "setup", side_effect=remove_error) as remove, \
+                 patch.object(D.G5, "inspect", side_effect=inspect_error) as inspect:
+                with self.assertRaisesRegex(D.Failed, "managed_cleanup_failed"):
+                    obj.remove()
+            disable.assert_called_once_with(False)
+            remove.assert_called_once_with(D.G0, obj.options, obj.root, obj.env, "remove")
+            inspect.assert_called_once_with(D.G0, obj.options, obj.root, obj.env, False)
+            self.assertEqual([row["stage"] for row in obj.cleanup_attempts],
+                             ["disable", "remove", "inspect_absent"])
+            self.assertEqual([row["status"] for row in obj.cleanup_attempts],
+                             ["passed", "failed" if remove_error else "passed",
+                              "failed" if inspect_error else "passed"])
+            self.assertEqual(obj.registered, inspect_error is not None)
+            self.assertEqual(obj.install_attempted, inspect_error is not None)
+            self.assertNotIn("PRIVATE", json.dumps(obj.cleanup_attempts))
+
+    def test_success_requires_all_cleanup_stages(self):
+        obj = self.installation()
+        with patch.object(obj, "change", return_value={"enabled": False}), \
+             patch.object(D.G5, "setup"), patch.object(D.G5, "inspect"):
+            obj.remove()
+        self.assertEqual([row["status"] for row in obj.cleanup_attempts], ["passed"] * 3)
+        self.assertFalse(obj.registered or obj.install_attempted)
+
+
 class ExitObserverTests(unittest.TestCase):
     def observe(self, receipt, code):
         bash = shutil.which("bash")
@@ -147,14 +291,17 @@ class NativeNotifyTests(unittest.TestCase):
             MESSAGE_TYPE_METHOD_RETURN=2, MESSAGE_TYPE_SIGNAL=4, HANDLER_RESULT_HANDLED=0))
         obj.context = SimpleNamespace(pending=lambda: False)
         obj.connections = [SimpleNamespace(get_is_connected=lambda: True)]
-        obj.owner, obj.calls, obj.actions, obj.error = ":1.7", [], [], None
+        obj.owner, obj.calls, obj.actions, obj.closed, obj.error = ":1.7", [], [], [], None
+        obj.dunst = SimpleNamespace(poll=lambda: None)
+        obj.bus = SimpleNamespace(GetNameOwner=lambda *a, **k: obj.owner)
         return obj
 
     def arguments(self, strict=True):
         return ["claude-notifications" if strict else "agent-notifications", 0, "", "Gemini CLI",
                 D.G5.COPY["task_complete"], ["default", "Focus Terminal"] if strict else [], {}, 30000]
 
-    def message(self, kind, sender, signature, arguments, serial=0, reply=0, destination=None):
+    def message(self, kind, sender, signature, arguments, serial=0, reply=0, destination=None,
+                member=None):
         if kind == 1 and destination is None:
             destination = "org.freedesktop.Notifications"
         return SimpleNamespace(get_type=lambda: kind, get_sender=lambda: sender,
@@ -162,7 +309,7 @@ class NativeNotifyTests(unittest.TestCase):
             get_serial=lambda: serial, get_reply_serial=lambda: reply,
             get_destination=lambda: destination, get_path=lambda: "/org/freedesktop/Notifications",
             get_interface=lambda: "org.freedesktop.Notifications",
-            get_member=lambda: "ActionInvoked" if kind == 4 else "Notify")
+            get_member=lambda: member or ("ActionInvoked" if kind == 4 else "Notify"))
 
     def test_informational_fallback_cannot_satisfy_revocation_precondition(self):
         obj = self.observer()
@@ -211,6 +358,123 @@ class NativeNotifyTests(unittest.TestCase):
         self.assertEqual(obj.error, "native_notify_signature")
         with self.assertRaises(D.Failed):
             obj.pump()
+
+    def informational(self):
+        obj = self.observer()
+        row = D.notify_call_projection("susssasa{sv}i", self.arguments(False), ":1.10", 3)
+        row["id"] = 8
+        obj.calls.append(row)
+        return obj, row
+
+    def close_message(self, obj, identifier=8, reason=2, destination=":1.10", sender=None):
+        return self.message(4, sender or obj.owner, "uu", [identifier, reason],
+                            destination=destination, member="NotificationClosed")
+
+    @staticmethod
+    def immediate_wait(predicate, **options):
+        result = predicate()
+        if not result:
+            raise D.N.Unqualified(options.get("failure", "not_observed"))
+        return result
+
+    def test_informational_click_requires_owned_user_dismissal(self):
+        obj, row = self.informational()
+        obj.before_click(0, False)
+        obj.message(None, self.close_message(obj))
+        result = obj.after_click(row)
+        self.assertTrue(result["informational_user_dismissal_observed"])
+        self.assertEqual(result["native_click_delivery"], "NotificationClosed_reason_2")
+        self.assertEqual(result["native_user_dismissal"], {"notification_id": 8, "reason": 2})
+        self.assertFalse(result["authentic_dunst_action_observed"])
+
+    def test_expiry_api_closure_wrong_destination_or_duplicate_cannot_prove_click(self):
+        for reason, destination, duplicate in ((1, ":1.10", False), (3, ":1.10", False),
+                                                (4, ":1.10", False), (2, ":1.11", False),
+                                                (2, None, False), (2, ":1.10", True)):
+            obj, row = self.informational()
+            with self.subTest(reason=reason, destination=destination, duplicate=duplicate):
+                obj.message(None, self.close_message(obj, reason=reason, destination=destination))
+                if duplicate:
+                    obj.message(None, self.close_message(obj))
+                with self.assertRaisesRegex(D.Failed, "informational_click_not_owned_user_dismissal"):
+                    obj.after_click(row)
+                self.assertFalse(row["finished"])
+
+    def test_missing_foreign_or_other_id_close_cannot_prove_click(self):
+        for sender, identifier in ((":1.99", 8), (":1.7", 9), (None, None)):
+            obj, row = self.informational()
+            with self.subTest(sender=sender, identifier=identifier):
+                if identifier:
+                    obj.message(None, self.close_message(obj, sender=sender, identifier=identifier))
+                with patch.object(D.N, "wait_for", side_effect=self.immediate_wait):
+                    with self.assertRaisesRegex(D.N.Unqualified, "informational_click_delivery_not_observed"):
+                        obj.after_click(row)
+                self.assertFalse(row["finished"])
+
+    def test_prior_close_or_unexpected_action_cannot_pass_informational_case(self):
+        obj, row = self.informational()
+        obj.message(None, self.close_message(obj))
+        with self.assertRaisesRegex(D.Failed, "native_banner_closed_before_x11_click"):
+            obj.before_click(0, False)
+        obj.message(None, self.message(4, obj.owner, "us", [8, "default"], destination=":1.10"))
+        with self.assertRaisesRegex(D.Failed, "informational_banner_emitted_action"):
+            obj.after_click(row)
+
+
+class BannerOwnershipTests(unittest.TestCase):
+    def desktop(self, owner_pid):
+        obj = object.__new__(D.Desktop)
+        obj.banner_server = SimpleNamespace(pid=7, poll=lambda: None)
+        obj.banner_server_identity = {"pid": 7, "birth": 41}
+        obj.window_owner = SimpleNamespace(pid=lambda window: owner_pid)
+        obj.displayed = lambda: 1
+        obj.window_pid = lambda window: self.fail("Banner must not require _NET_WM_PID")
+        calls = []
+        def command(*argv):
+            calls.append(argv)
+            return "WINDOW=83\nX=1100\nY=70\n" if argv[0] == "getmouselocation" else ""
+        obj.x = command
+        return obj, calls
+
+    def test_banner_without_ewmh_pid_uses_server_owner(self):
+        obj, calls = self.desktop(7)
+        with patch.object(D, "still_present", return_value=True):
+            obj.click()
+        self.assertEqual(calls[-1], ("click", "1"))
+
+    def test_unknown_foreign_or_expired_server_owner_prevents_click(self):
+        for owner_pid, alive in ((9, True), (0, True), (7, False)):
+            obj, calls = self.desktop(owner_pid)
+            with self.subTest(owner_pid=owner_pid, alive=alive), \
+                 patch.object(D, "still_present", return_value=alive):
+                with self.assertRaisesRegex(D.Failed, "click_pointer_not_over_owned_banner"):
+                    obj.click()
+            self.assertNotIn(("click", "1"), calls)
+
+    def test_owned_server_binding_is_set_before_start(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-dunst-") as temporary:
+            lab = D.GeminiDesktopLab(Path(temporary), {})
+            config = lab.root / "dunstrc"
+            config.write_text("[global]\nmouse_left_click = do_action\n")
+            def started(argv):
+                self.assertIn("mouse_left_click = do_action, close_current\n", config.read_text())
+                return "owned_child"
+            with patch.object(D.N.Lab, "start", side_effect=started):
+                self.assertEqual(lab.start(["/usr/bin/dunst", "-config", config]), "owned_child")
+            self.assertEqual(lab.report["dunst_left_click"], ["do_action", "close_current"])
+
+    def test_other_config_and_unexpected_binding_are_not_rewritten(self):
+        with tempfile.TemporaryDirectory(prefix="TEST-gemini-dunst-") as temporary:
+            lab = D.GeminiDesktopLab(Path(temporary), {})
+            for name, content in (("other.conf", "mouse_left_click = do_action\n"),
+                                  ("dunstrc", "mouse_left_click = context\n")):
+                config = lab.root / name
+                config.write_text(content)
+                with self.subTest(name=name), patch.object(D.N.Lab, "start") as start:
+                    with self.assertRaises(D.Failed):
+                        lab.start(["/usr/bin/dunst", "-config", config])
+                self.assertEqual(config.read_text(), content)
+                start.assert_not_called()
 
 
 if __name__ == "__main__":
