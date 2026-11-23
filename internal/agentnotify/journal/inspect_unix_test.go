@@ -43,7 +43,7 @@ func TestInspectReadOnlyValidatesCanonicalSnapshotWithoutLock(t *testing.T) {
 
 func TestInspectReadOnlyRejectsCorruptOrNonCanonicalJournal(t *testing.T) {
 	for _, mutation := range []struct {
-		name string
+		name   string
 		change func([]byte) []byte
 	}{
 		{"corrupt json", func([]byte) []byte { return []byte("{bad\n") }},
