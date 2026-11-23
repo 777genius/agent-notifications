@@ -61,6 +61,7 @@ func claudePermissionRecentTool(session SessionContext) string {
 		return ""
 	}
 	completed := make(map[string]bool)
+	seenUses := make(map[string]bool)
 	type pendingTool struct {
 		name string
 		at   time.Time
@@ -117,6 +118,15 @@ func claudePermissionRecentTool(session SessionContext) string {
 			if (item.Type == "tool_use" && (item.ID == "" || record.Type != "assistant")) ||
 				(item.Type == "tool_result" && (item.ToolUseID == "" || record.Type != "user")) {
 				return ""
+			}
+			if item.Type == "tool_use" {
+				// Claude correlation IDs must be unique in a session. Reusing one
+				// would overwrite a competing pending tool in the map and make
+				// an ambiguous permission prompt appear uniquely attributable.
+				if seenUses[item.ID] {
+					return ""
+				}
+				seenUses[item.ID] = true
 			}
 		}
 		// Walk newest to oldest, so a later tool_result suppresses its
