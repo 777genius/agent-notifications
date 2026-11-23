@@ -490,14 +490,23 @@ func renameAt(dir *os.File, from, to string, replace bool) error {
 	offset := unsafe.Offsetof(renameInfo{}.Name)
 	buffer := make([]byte, int(offset)+len(encoded)*2)
 	info := (*renameInfo)(unsafe.Pointer(&buffer[0]))
+	// The ordinary FileRenameInformation replacement can reject an open
+	// destination even when the inspector granted FILE_SHARE_DELETE. Use
+	// the same native POSIX replacement contract as sharedstate's writer,
+	// so the immutable old snapshot remains readable and new readers see
+	// the published snapshot. Unsupported filesystems fail closed.
+	// https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information
+	infoClass := uint32(windows.FileRenameInformation)
 	if replace {
-		info.Replace = windows.FILE_RENAME_REPLACE_IF_EXISTS
+		info.Replace = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
+		const fileRenameInformationEx uint32 = 65
+		infoClass = fileRenameInformationEx
 	}
 	info.Root = windows.Handle(dir.Fd())
 	info.Length = uint32(len(encoded) * 2)
 	copy(unsafe.Slice((*uint16)(unsafe.Pointer(&buffer[offset])), len(encoded)), encoded)
 	var status windows.IO_STATUS_BLOCK
-	err = windows.NtSetInformationFile(h, &status, &buffer[0], uint32(len(buffer)), windows.FileRenameInformation)
+	err = windows.NtSetInformationFile(h, &status, &buffer[0], uint32(len(buffer)), infoClass)
 	if err != nil {
 		if nt, ok := err.(windows.NTStatus); ok {
 			return nt.Errno()
