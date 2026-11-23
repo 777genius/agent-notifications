@@ -110,6 +110,24 @@ func TestClaudePermissionRecentToolRequiresUniqueFreshUnresolvedRecord(t *testin
 			t.Fatalf("ignored the other in-flight tool: %q", name)
 		}
 	})
+	t.Run("stale unresolved plus fresh call is ambiguous", func(t *testing.T) {
+		s := writeClaudePermissionFixture(t, "test-stale-parallel",
+			claudeToolRecord("test-stale-parallel", "call-old", "Bash", now.Add(-50*time.Second)),
+			claudeToolRecord("test-stale-parallel", "call-fresh", "Edit", now))
+		if name := claudePermissionRecentTool(s); name != "" {
+			t.Fatalf("dropped old unresolved call and guessed fresh permission: %q", name)
+		}
+	})
+	t.Run("oversized historical transcript never proves uniqueness", func(t *testing.T) {
+		s := writeClaudePermissionFixture(t, "test-truncated",
+			claudeToolRecord("test-truncated", "call-old", "Bash", now.Add(-time.Minute)),
+			map[string]any{"type": "user", "sessionId": "test-truncated", "message": map[string]any{
+				"role": "user", "content": strings.Repeat("history", claudePermissionTailBytes/5)}},
+			claudeToolRecord("test-truncated", "call-new", "Edit", now))
+		if name := claudePermissionRecentTool(s); name != "" {
+			t.Fatalf("truncated transcript falsely inferred uniqueness: %q", name)
+		}
+	})
 	t.Run("incomplete append cannot lend an older tool identity", func(t *testing.T) {
 		s := writeClaudePermissionFixture(t, "test-unflushed",
 			claudeToolRecord("test-unflushed", "call-1", "Bash", now))
