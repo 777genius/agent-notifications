@@ -74,28 +74,49 @@ func claudePermissionRecentTool(session SessionContext) string {
 	now := time.Now()
 	lines := bytes.Split(tail, []byte{'\n'})
 	for i := len(lines)-1; i >= 0; i-- {
-		if len(lines[i]) == 0 || len(lines[i]) > claudePermissionMaxRecord {
+		if len(lines[i]) == 0 {
 			continue
+		}
+		if len(lines[i]) > claudePermissionMaxRecord {
+			return ""
 		}
 		var record struct {
 			Type      string `json:"type"`
 			SessionID string `json:"sessionId"`
 			Timestamp string `json:"timestamp"`
 			Message   struct {
-				Content []struct {
-					Type      string `json:"type"`
-					ID        string `json:"id"`
-					ToolUseID string `json:"tool_use_id"`
-					Name      string `json:"name"`
-				} `json:"content"`
+				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 		}
-		if json.Unmarshal(lines[i], &record) != nil || record.SessionID != session.SessionID {
+		if json.Unmarshal(lines[i], &record) != nil {
+			// Bad JSON may conceal a second in-flight call or its result.
+			// Fall back to Claude's exact message rather than silently skip.
+			return ""
+		}
+		if record.SessionID != session.SessionID {
 			continue
+		}
+		content := bytes.TrimSpace(record.Message.Content)
+		if len(content) == 0 || bytes.Equal(content, []byte("null")) ||
+			content[0] == '"' {
+			// Claude user prompts may use a string rather than block array.
+			continue
+		}
+		if content[0] != '[' {
+			return ""
+		}
+		var blocks []struct {
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			ToolUseID string `json:"tool_use_id"`
+			Name      string `json:"name"`
+		}
+		if json.Unmarshal(content, &blocks) != nil {
+			return ""
 		}
 		// Walk newest to oldest, so a later tool_result suppresses its
 		// earlier tool_use even when both occur in one model turn.
-		for _, item := range record.Message.Content {
+		for _, item := range blocks {
 			if item.Type == "tool_result" && item.ToolUseID != "" {
 				completed[item.ToolUseID] = true
 				delete(pending, item.ToolUseID)
@@ -108,7 +129,7 @@ func claudePermissionRecentTool(session SessionContext) string {
 		if err != nil || at.After(now.Add(5*time.Second)) || now.Sub(at) > claudePermissionMaxAge {
 			continue
 		}
-		for _, item := range record.Message.Content {
+		for _, item := range blocks {
 			if item.Type != "tool_use" || item.ID == "" || completed[item.ID] {
 				continue
 			}
