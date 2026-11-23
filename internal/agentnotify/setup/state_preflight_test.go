@@ -126,7 +126,7 @@ func TestInspectChecksInitializationAdmissionBeforeEnable(t *testing.T) {
 			}
 		})
 	}
-	for _, kind := range []string{"stage-mode", "journal-mode", "spool-mode", "spool-lock-mode"} {
+	for _, kind := range []string{"stage-mode", "journal-mode", "journal-lock-mode", "spool-mode", "spool-lock-mode"} {
 		t.Run("private staged state "+kind+" must match enable", func(t *testing.T) {
 			o, r := fixture(t)
 			o.Fault = func(phase string) error {
@@ -145,6 +145,9 @@ func TestInspectChecksInitializationAdmissionBeforeEnable(t *testing.T) {
 			switch kind {
 			case "journal-mode":
 				changed = filepath.Join(stage, "journal")
+			case "journal-lock-mode":
+				changed = filepath.Join(stage, "journal", "lock")
+				mode = 0644
 			case "spool-mode":
 				changed = filepath.Join(stage, "native-spool")
 			case "spool-lock-mode":
