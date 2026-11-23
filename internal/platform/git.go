@@ -4,8 +4,8 @@ import (
 	"context"
 	"os"
 	"os/exec"
-	"runtime"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
