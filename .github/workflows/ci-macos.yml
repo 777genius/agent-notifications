@@ -107,9 +107,10 @@ jobs:
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'windows-only' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent') }}
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && format('Metadata edit ignored (macOS {0})', matrix.go) || format('Test on macOS ({0})', matrix.go) }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && matrix.os || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
-    # Go 1.26 also runs selector qualification and network diagnostics.
-    # Reserve time for the complete job and post-action cleanup.
-    timeout-minutes: ${{ matrix.go == '1.26' && 40 || 30 }}
+    # Both Go versions run the full offline installer suite; the 30-minute
+    # Go 1.25 job budget cancelled active tests on a hosted macOS runner.
+    # Keep individual test deadlines and reserve time for post-action cleanup.
+    timeout-minutes: 40
 
     strategy:
       fail-fast: false
