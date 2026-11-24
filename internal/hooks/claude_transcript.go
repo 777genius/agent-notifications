@@ -91,6 +91,30 @@ func (h *Handler) enrichClaudeStop(status analyzer.Status, message string, messa
 	return status, &TurnInsight{Body: body}
 }
 
+// skipAgentInitiatedTurn reports whether a Claude Stop completion should be
+// dropped because typed user input did not start the turn, for example a
+// subagent result or a teammate message woke the session
+// (notifyOnAgentInitiatedTurns=false). Only completions are skipped: questions,
+// plans, permission requests and errors still need the user. Transcripts
+// without origin records keep the earlier behavior.
+func (h *Handler) skipAgentInitiatedTurn(status analyzer.Status, messages []jsonl.Message) bool {
+	if h.cfg.ShouldNotifyOnAgentInitiatedTurns() {
+		return false
+	}
+	if status != analyzer.StatusTaskComplete && status != analyzer.StatusReviewComplete {
+		return false
+	}
+	kind, known := jsonl.TurnOrigin(messages)
+	if !known || kind == jsonl.OriginKindHuman {
+		return false
+	}
+	if kind == "" {
+		kind = "unrecorded"
+	}
+	logging.Debug("Stop: turn started by %s input, skipping %s (config: notifyOnAgentInitiatedTurns)", kind, status)
+	return true
+}
+
 // A Claude success summary can mention an error it fixed. Only a failure
 // phrase standing alone or introducing details is treated as a host error;
 // the Codex last-message heuristic is intentionally broader and not used here.

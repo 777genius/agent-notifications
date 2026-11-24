@@ -64,7 +64,8 @@ jobs:
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: verify
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    # Jekyll's container action needs Docker during job preparation.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read

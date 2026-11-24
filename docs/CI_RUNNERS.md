@@ -25,8 +25,8 @@ Same-repository PRs, pushes and dispatches use the configured runner.
 
 ## Coverage and historical migration evidence
 
-Routing covers ordinary Ubuntu/macOS CI, landing checks/deployment, Claude SDK
-blackbox E2E, selector bootstrap, install recovery (including root/APFS tests),
+Routing covers ordinary Ubuntu/macOS CI, landing verification, selector
+bootstrap, install recovery (including root/APFS tests),
 qualification candidate builds, signing smoke, and future release version/build,
 notifier, publishing and artifact E2E jobs. Existing commands, permissions,
 certificate/keychain handling, matrix coverage and release custody are retained.
@@ -38,7 +38,8 @@ The isolated runner canary in
 passed all four Ubuntu ARM 22.04/24.04 and Namespace macOS 15/26 cells. Ubuntu
 reported the expected OS/architecture and PowerShell 7.6.5; macOS 15/26 provided
 PowerShell 7.6.0/7.6.6. x64 Ubicloud and Namespace had earlier pilot evidence.
-No extra PowerShell installation or test-step changes are needed for SDK jobs.
+These historical canary results apply to the tested images; the current Claude
+SDK runner exception is listed below.
 Provider/OS evidence is distinct from application E2E or signing evidence; the
 first routed application runs must still pass their existing checks.
 
@@ -46,6 +47,16 @@ first routed application runs must still pass their existing checks.
 
 These contracts require new qualification before changing provider:
 
+- `claude-sdk-e2e.yml`: `sdk-blackbox` uses its explicit `matrix.runner` labels:
+  `ubuntu-24.04`, `macos-15` and `windows-2025`. `CI_LINUX_RUNNER` and
+  `CI_MACOS_15_RUNNER` do not apply to this job. It requires `pwsh`; the routed
+  Linux runner failed before the SDK checks because PowerShell was unavailable
+  ([run 45067168388](https://github.com/777genius/agent-notifications/actions/runs/45067168388/job/137345805680)).
+- `landing.yml`: `deploy` uses stock `ubuntu-24.04` because
+  `actions/jekyll-build-pages` pulls a Docker image during job preparation.
+  `CI_LINUX_RUNNER` does not apply to this job; `verify` keeps ordinary routing.
+  The routed Linux runner failed before checkout because Docker was unavailable
+  ([run 45079148244](https://github.com/777genius/agent-notifications/actions/runs/45079148244/job/137389364516)).
 - `ci-ubuntu.yml`: `cursor-mkdir-diagnostic` and `cursor-installed-e` retain
   `ubuntu-24.04`. Their frozen carrier, pinned checkout and qualified physical
   machine/runner evidence are outside ordinary CI routing.
@@ -79,10 +90,10 @@ These contracts require new qualification before changing provider:
 
 ## Cursor source qualification kernels
 
-The stock Ubuntu 24.04.5 runner moved from `6.17.0-1022-azure` to
-`7.0.0-1017-azure`. The source namespace policy accepts these two exact kernels
-only, with the existing Linux amd64, Ubuntu release, ext4 ancestry and original
-profile token requirements. Unknown kernels continue to refuse.
+The stock Ubuntu 24.04.5 pool has supplied `6.17.0-1022-azure`,
+`7.0.0-1017-azure` and `7.0.0-1014-aws`. Source qualification is specific to each
+exact kernel and retains the Linux amd64, Ubuntu release, ext4 ancestry and
+original profile token requirements. Unknown kernels continue to refuse.
 
 The historical P1 receipt remains evidence for the original kernel only. The
 kernel 7 qualification has its own `source-ci-pr497` identity. Before merging
@@ -90,6 +101,36 @@ kernel 7 qualification has its own `source-ci-pr497` identity. Before merging
 Ubuntu job must pass the real directory identity/swap, Cursor, materializer,
 caller and recovery contracts on that kernel. `NOT_RUN` remains a CI failure;
 this source qualification grants no installed native E or consent.
+
+### AWS kernel source qualification
+
+The `7.0.0-1014-aws` entry has its own
+`source-ci-aws-20261123` identity. It cannot inherit either Azure receipt.
+The kernel policy and identity mapping admit only this exact new string;
+neighboring versions, another provider suffix and extra characters remain
+refused. An unknown kernel also receives no source evidence identity.
+
+Acceptance requires a complete `cursor-physical` result on an actual
+Ubuntu 24.04.5/Linux amd64 host with this AWS kernel: directory identity/swap,
+original-token revalidation, selected projection/acknowledgement/data,
+positive materializer, caller handoff and matching recovery, and package cleanup.
+The existing job commands, positive markers, `NOT_RUN` failures, ext4 ancestry
+checks and installed-native/consent boundaries are unchanged. A passing Azure
+run cannot qualify the AWS entry.
+
+The source-bound AWS results and review are tracked in
+[PR 682](https://github.com/777genius/agent-notifications/pull/682). Its acceptance
+checklist requires the complete measurement before merge; an entry in this
+source policy alone is not evidence that the measurement passed.
+
+Both attempts of the unchanged source `06734f7` reached the new AWS tuple and
+refused the positive materializer at its kernel guard
+([first attempt](https://github.com/777genius/agent-notifications/actions/runs/45082159894/job/137436146752),
+[bounded retry](https://github.com/777genius/agent-notifications/actions/runs/45082159894/job/137472781097)).
+Those partial results do not qualify the missing materializer/caller contracts
+or establish ext4 for every ancestor. The candidate must record its own complete
+AWS source-bound evidence before merge, as the earlier kernel qualification did
+in [PR 497](https://github.com/777genius/agent-notifications/pull/497).
 
 ## Concurrency and rollback
 

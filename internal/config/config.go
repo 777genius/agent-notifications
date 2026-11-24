@@ -37,6 +37,7 @@ type NotificationsConfig struct {
 	NotifyOnSubagentStop                        bool             `json:"notifyOnSubagentStop"`           // Send notifications when subagents (Task tool) complete, default: false. Requires suppressForSubagents=false to take effect.
 	SuppressForSubagents                        *bool            `json:"suppressForSubagents"`           // Suppress subagent (SubagentStop) notifications, and Stop notifications whose transcript_path is a subagent/teammate transcript; default: true. Overrides notifyOnSubagentStop.
 	NotifyOnTextResponse                        *bool            `json:"notifyOnTextResponse"`           // Send notifications for text-only responses (no tools), default: true
+	NotifyOnAgentInitiatedTurns                 *bool            `json:"notifyOnAgentInitiatedTurns"`    // Claude Code: send task/review completion notifications for turns not started by typed user input (subagent results, teammate and cross-session messages), default: true
 	RespectJudgeMode                            *bool            `json:"respectJudgeMode"`               // Honor CLAUDE_HOOK_JUDGE_MODE=true env var to suppress notifications, default: true
 	SuppressFilters                             []SuppressFilter `json:"suppressFilters,omitempty"`      // Rules for suppressing notifications by status/branch/folder
 	TeamMode                                    string           `json:"teamMode,omitempty"`             // Team mode: "always" (no suppression, default), "wait-all" (suppress lead, notify when all idle), "never" (silent in team mode)
