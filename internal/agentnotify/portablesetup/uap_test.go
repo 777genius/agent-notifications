@@ -3092,7 +3092,13 @@ func TestLocalNativeGroupComposesSharedCanonicalPackage(t *testing.T) {
 			// Current public Local activation remains Prepared. Repair must pass
 			// revision preflight and preserve that truthful incomplete outcome,
 			// rather than attempt to rewrite Codex to Local's older tree.
-			_, repairErr := mat.ApplyGroup(testCtx(t), repairs)
+			// Composing and revalidating two retained revisions in one public
+			// transaction needs a bounded minute under native, race-enabled CI.
+			repairCtx, cancelRepair := context.WithTimeout(t.Context(), time.Minute)
+			defer cancelRepair()
+			repairStarted := time.Now()
+			_, repairErr := mat.ApplyGroup(repairCtx, repairs)
+			t.Logf("mixed retained repair took %s (context: %v)", time.Since(repairStarted), repairCtx.Err())
 			var incomplete ResultError
 			if !errors.As(repairErr, &incomplete) || incomplete.Result.Outcome != uapinstaller.OutcomeIncomplete || incomplete.Result.Reason != "committed binding is not activated" {
 				t.Fatal("mixed retained repair must reach public activation boundary", repairErr)
