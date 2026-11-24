@@ -9,6 +9,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'scripts/opencode-range-e2e.py'
+      - 'scripts/test_opencode_range_archive.py'
       - 'scripts/opencode-v226-source-e2e.py'
       - 'scripts/opencode-semantic-e2e.py'
       - 'scripts/ci-ubuntu-mirror.sh'
@@ -63,6 +64,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Check release archive admission
+        if: startsWith(matrix.target, 'linux')
+        run: python -B scripts/test_opencode_range_archive.py
       - name: Install Linux build dependencies
         if: startsWith(matrix.target, 'linux')
         run: |

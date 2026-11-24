@@ -1,0 +1,153 @@
+name: Gemini installed CLI native X11 click E2E
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - '.github/workflows/gemini-desktop-linux.yml'
+      - 'scripts/gemini-installed-desktop-linux.py'
+      - 'scripts/test_gemini_installed_desktop_linux.py'
+      - 'scripts/gemini-native-ci.py'
+      - 'scripts/pi-native-preflight.py'
+      - 'scripts/navigation-linux-portal-callback-probe.py'
+      - 'scripts/ci-ubuntu-mirror.sh'
+      - 'tests/integration/gemini_native_e2e.py'
+      - 'tests/integration/gemini_notifications_e2e.py'
+      - 'cmd/claude-notifications/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/gemini-desktop-linux.yml'
+      - 'scripts/gemini-installed-desktop-linux.py'
+      - 'scripts/test_gemini_installed_desktop_linux.py'
+      - 'scripts/gemini-native-ci.py'
+      - 'scripts/pi-native-preflight.py'
+      - 'scripts/navigation-linux-portal-callback-probe.py'
+      - 'scripts/ci-ubuntu-mirror.sh'
+      - 'tests/integration/gemini_native_e2e.py'
+      - 'tests/integration/gemini_notifications_e2e.py'
+      - 'cmd/claude-notifications/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+concurrency:
+  group: gemini-desktop-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  native-desktop:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    name: Gemini 0.62.0 / installed hook / X11 banner and click
+    runs-on: ubuntu-24.04
+    # Hosted Ubuntu mirrors can consume the old 20-minute total before tests start.
+    timeout-minutes: 45
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '1'
+      GOFLAGS: '-mod=readonly'
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Verify exact clean source
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install native desktop fixture dependencies
+        timeout-minutes: 30
+        run: |
+          bash scripts/ci-ubuntu-mirror.sh
+          sudo apt-get -o APT::Update::Error-Mode=any update
+          sudo apt-get install --no-install-recommends -y libasound2-dev dbus-daemon dbus-bin python3-dbus python3-gi dunst xvfb openbox xterm xdotool x11-utils libxres1 pulseaudio pulseaudio-utils alsa-utils libasound2-plugins libnotify-bin ffmpeg fonts-dejavu-core
+      - name: Check evidence and isolation contracts
+        run: /usr/bin/python3 -B -W error::ResourceWarning scripts/test_gemini_installed_desktop_linux.py -v
+      - name: Install exact Gemini CLI in a fresh TEST root
+        run: |
+          python3 -B - <<'PY'
+          import importlib.util, json, os, pathlib, shutil, subprocess, tempfile
+          repo = pathlib.Path.cwd().resolve()
+          def module(name, path):
+              spec = importlib.util.spec_from_file_location(name, path)
+              value = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(value)
+              return value
+          g0 = module("gemini_desktop_g0", repo / "tests/integration/gemini_native_e2e.py")
+          ci = module("gemini_desktop_ci", repo / "scripts/gemini-native-ci.py")
+          root = pathlib.Path(tempfile.mkdtemp(prefix="TEST-gemini-desktop-", dir="/tmp")).resolve()
+          root.chmod(0o700)
+          (root / g0.MARKER).write_text("owned Gemini desktop TEST artifacts\n")
+          bootstrap = g0.new_lab(str(root / "TEST-bootstrap"))
+          node, shell = ci.tool("node"), ci.tool("bash")
+          env = g0.minimal_env(bootstrap, node, shell)
+          for kind in ("userconfig", "globalconfig"):
+              path = root / ("npm-" + kind)
+              path.write_text("")
+              env["npm_config_" + kind] = str(path)
+          env.update(npm_config_cache=str(root / "npm-cache"),
+                     npm_config_update_notifier="false", npm_config_registry="https://registry.npmjs.org")
+          install = root / "cli"
+          install.mkdir(mode=0o700)
+          (install / g0.MARKER).write_text("fresh Gemini desktop TEST installation\n")
+          (install / "package.json").write_text(json.dumps({"name": "an-gemini-desktop-test", "private": True,
+              "dependencies": {"@google/gemini-cli": "0.62.0"}}) + "\n")
+          subprocess.run([str(node), str(ci.npm_cli(node)), "install", "--prefix", str(install),
+                          "--include=optional", "--no-audit", "--no-fund"], cwd=install, env=env,
+                         check=True, timeout=240)
+          package = install / "node_modules/@google/gemini-cli/package.json"
+          info = json.loads(package.read_text())
+          entry = info["bin"] if isinstance(info["bin"], str) else info["bin"]["gemini"]
+          executable = (package.parent / entry).resolve(strict=True)
+          g0.cli_identity(str(executable), str(install), "0.62.0")
+          evidence = pathlib.Path(os.environ["RUNNER_TEMP"]) / "gemini-desktop-evidence"
+          evidence.mkdir(mode=0o700)
+          shutil.copyfile(install / "package-lock.json", evidence / "npm-package-lock.json")
+          with open(os.environ["GITHUB_ENV"], "a") as stream:
+              for key, value in {"GEMINI_DESKTOP_TEST_ROOT": root, "GEMINI_DESKTOP_NODE": node,
+                                 "GEMINI_DESKTOP_SHELL": shell, "GEMINI_DESKTOP_ENTRY": executable}.items():
+                  stream.write(f"{key}={value}\n")
+          PY
+      - name: Build exact installed-format product
+        run: |
+          go build -trimpath -buildvcs=true -ldflags='-s -w' -o "$GEMINI_DESKTOP_TEST_ROOT/claude-notifications" ./cmd/claude-notifications
+          go version -m "$GEMINI_DESKTOP_TEST_ROOT/claude-notifications" > "$RUNNER_TEMP/gemini-desktop-evidence/go-version-m.txt"
+          test -z "$(git status --porcelain)"
+      - name: Actual installed CLI turn, banner, and native X11 click
+        run: |
+          /usr/bin/python3 -B scripts/gemini-installed-desktop-linux.py \
+            --candidate "$GEMINI_DESKTOP_TEST_ROOT/claude-notifications" \
+            --gemini-executable "$GEMINI_DESKTOP_ENTRY" \
+            --node-executable "$GEMINI_DESKTOP_NODE" \
+            --cli-install-root "$GEMINI_DESKTOP_TEST_ROOT/cli" \
+            --hook-shell "$GEMINI_DESKTOP_SHELL" \
+            --gemini-version 0.62.0 \
+            --source-sha "$SOURCE_SHA" \
+            --report "$RUNNER_TEMP/gemini-desktop-evidence/desktop.json"
+      - name: Preserve bounded result, including failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gemini-desktop-linux-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/gemini-desktop-evidence/*
+          if-no-files-found: warn
+          retention-days: 14
