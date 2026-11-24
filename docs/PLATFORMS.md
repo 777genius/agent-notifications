@@ -10,7 +10,7 @@
 **Self-contained runtime after setup:**
 - ✅ Binaries auto-download from GitHub Releases
 - ✅ Pure Go - no C compiler needed
-- ✅ All libraries bundled
+- ✅ Core Go notification libraries bundled; guarded Linux/X11 terminal focus needs the host tools listed in the [focus guide](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli)
 - ✅ Works offline after first setup
 
 **Windows-specific features:**
@@ -19,9 +19,9 @@
 - MP3/WAV/OGG/FLAC audio playback via native Windows APIs
 - System sounds not accessible - use built-in MP3s or custom files
 
-### Click-to-Focus (macOS & Linux)
+### Click-to-Focus (agent- and OS-specific)
 
-Clicking a notification activates your terminal window. Auto-detects terminal and platform.
+Clicking an eligible notification can activate the originating terminal window or pane, depending on agent, OS and terminal. **Qoder CLI, Gemini CLI and Cursor CLI** use a separate guarded **local Linux/X11 window-only opt-in** with explicit schema-2 consent and verified origin. Wayland, macOS, Windows and unverified sessions remain informational-only for these three agents. Shared strict X11 daemon/click mechanics were tested with a Go fixture; authenticated installed CLI-to-click E2E remains unqualified. [Consent and limits](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
 
 **macOS** — via AX API with bundle ID detection:
 
@@ -44,12 +44,12 @@ Clicking a notification activates your terminal window. Auto-detects terminal an
 | JetBrains IDEs (IntelliJ IDEA, PhpStorm, WebStorm, PyCharm, GoLand, …) | GNOME, KDE, Sway, X11 — the IDE window, not the terminal tab |
 | Any other | Fallback by name |
 
-Linux focus methods (tried in order): Warp session URL (`xdg-open`), GNOME extension, GNOME Shell Eval, GNOME FocusApp, wlrctl (Sway/wlroots), kdotool (KDE), xdotool (X11).
+Linux focus methods (tried in order when hints are present): Warp session URL (`xdg-open`), exact X11 window ID (`xdotool`/`wmctrl`), Sway ancestry (`swaymsg`), captured exact title (`wmctrl`/`xdotool`), GNOME extension/Shell Eval/FocusApp, `wlrctl` (other wlroots compositors and Sway ancestry misses), `kdotool` (KDE), `xdotool` (X11). Each window-level step stops on success; if Sway ancestry fails, its command is not repeated while the title and compositor fallbacks proceed.
 
 **Multiplexers:** tmux and kitty (macOS only), zellij and WezTerm (macOS & Linux) — click switches to the correct pane/tab. Linux zellij targets the exact pane; see the [Click-to-Focus Guide](CLICK_TO_FOCUS.md#multiplexers) for the full per-platform breakdown.
 
 **iTerm2 note:** to open the exact iTerm2 tab or split pane, enable `iTerm2 > Settings > General > Magic > Enable Python API`. If you just toggled it, restart iTerm2 once. Without the Python API, the plugin falls back to app-level iTerm activation instead of exact tab targeting.
 
-**Windows** — clicking a notification raises the originating terminal **window** (Windows Terminal, VS Code, conhost, …) via a protocol-activated toast. Window-level only: tab/split-pane targeting isn't possible (one window hosts all tabs), and picking among multiple WT windows in one process is best-effort. See the guide for details.
+**Windows (legacy qualified agents only)** — clicking a notification raises the originating terminal **window** (Windows Terminal, VS Code, conhost, …) through a protocol-activated toast. This does **not** add focus for Qoder/Gemini/Cursor. Window-only: tabs/splits are not targetable, and selection among multiple WT windows in one process is best-effort. See the guide.
 
 See **[Click-to-Focus Guide](CLICK_TO_FOCUS.md)** for configuration details.

@@ -61,6 +61,139 @@ env -u HOME USERPROFILE="$SANDBOX/windows profile" CLAUDE_HOME="$SANDBOX/legacy 
     bash -c 'source "$1"; [ "$CLAUDE_HOME" = "$2" ]' \
     _ "$SANDBOX/functions.sh" "$SANDBOX/explicit config"
 source "$SANDBOX/functions.sh"
+# Regression for #602: the shell must keep its POSIX intent filename while the
+# native setup-products helper receives the same file as a Windows absolute path.
+# Exercise every intent consumer, including the direct intent-args call.
+(
+    _CONFIG_STAGE="$SANDBOX/TEST selector stage with spaces"
+    mkdir -p "$_CONFIG_STAGE"
+    _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
+    _CONFIG_HELPER=trace_intent_helper
+    _PROMPT_OPEN=false
+    PLATFORM="Windows (Git Bash)"
+    trace="$SANDBOX/selector-intent-argv"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) ;;
+        *) cygpath() { [ "$1" = -w ] || return 2; printf 'C:\\TEST stage\\%s\n' "${2##*/}"; } ;;
+    esac
+    native_intent=$(cygpath -w "$_SELECTOR_INTENT")
+    trace_intent_helper() {
+        printf '%s\0' "$@" > "$trace"
+        case "$2" in
+            prepare) printf 'prepared\n' ;;
+            confirm) printf 'approved\n' ;;
+            intent-args) return 37 ;;
+        esac
+    }
+    read_intent_trace() {
+        argv=()
+        local value
+        while IFS= read -r -d '' value; do argv+=("$value"); done < "$trace"
+    }
+    for operation in prepare confirm preflight migration-apply; do
+        if [ "$operation" = migration-apply ]; then
+            selector_collect "$operation" --intent-file "$_SELECTOR_INTENT"
+        else
+            selector_collect "$operation" --products opencode --intent-file "$_SELECTOR_INTENT"
+        fi
+        read_intent_trace
+        if [ "$operation" = migration-apply ]; then
+            [ "${#argv[@]}" -eq 4 ] && [ "${argv[2]}" = --intent-file ] && [ "${argv[3]}" = "$native_intent" ] ||
+                { echo "Git Bash migration-apply passed a non-native intent path" >&2; exit 1; }
+        else
+            [ "${#argv[@]}" -eq 6 ] && [ "${argv[2]}" = --products ] && [ "${argv[3]}" = opencode ] &&
+                [ "${argv[4]}" = --intent-file ] && [ "${argv[5]}" = "$native_intent" ] ||
+                { echo "Git Bash selector $operation passed a non-native intent path" >&2; exit 1; }
+        fi
+        [ "${argv[0]}" = setup-products ] && [ "${argv[1]}" = "$operation" ] || exit 1
+    done
+    if load_frozen_dispatch; then echo "Intent-args helper refusal was lost" >&2; exit 1; fi
+    read_intent_trace
+    [ "${#argv[@]}" -eq 4 ] && [ "${argv[1]}" = intent-args ] &&
+        [ "${argv[2]}" = --intent-file ] && [ "${argv[3]}" = "$native_intent" ] ||
+        { echo "Git Bash intent-args passed a non-native intent path" >&2; exit 1; }
+    PLATFORM=Linux
+    selector_collect prepare --products opencode --intent-file "$_SELECTOR_INTENT"
+    read_intent_trace
+    [ "${argv[5]}" = "$_SELECTOR_INTENT" ] || { echo "POSIX selector path was changed" >&2; exit 1; }
+    PLATFORM="Windows (Git Bash)"
+    cygpath() { return 69; }
+    rm -f "$trace"
+    if selector_collect prepare --products opencode --intent-file "$_SELECTOR_INTENT"; then
+        echo "Failed native path conversion was ignored" >&2; exit 1
+    fi
+    [ ! -e "$trace" ] || { echo "Helper ran after path conversion refusal" >&2; exit 1; }
+    if load_frozen_dispatch; then
+        echo "Failed intent-args path conversion was ignored" >&2; exit 1
+    fi
+    [ ! -e "$trace" ] || { echo "Intent-args ran after path conversion refusal" >&2; exit 1; }
+)
+# Git Bash non-Cursor ready-clients wizard must pass native intent and progress
+# paths, rather than the shell's POSIX paths, to the native Go helper.
+(
+    PLATFORM="Windows (Git Bash)"
+    PRODUCT=claude
+    _PARALLEL_ACTIVE=false
+    _PARALLEL_READY_CLIENTS=claude
+    _PARALLEL_POLICY_READY=true
+    _CONFIG_STAGE="$SANDBOX/TEST wizard stage"
+    _SELECTOR_INTENT="$_CONFIG_STAGE/selector-intent.json"
+    _PROGRESS_JOURNAL="$_CONFIG_STAGE/progress.json"
+    _FROZEN_CONTROL="$SANDBOX/wizard-control"
+    _FROZEN_GLOBAL_CONFIG="$SANDBOX/wizard-global-config.json"
+    _FROZEN_RUNTIME=""
+    _FROZEN_CODEX_MCP=""
+    _FROZEN_CLAUDE_MCP=""
+    _CLAUDE_EXEC=""
+    _CODEX_EXEC=""
+    CONFIGURE_ARGS=()
+    BOOTSTRAP_TAG=""
+    DEFAULT_CODEX_HOME="$CODEX_HOME"
+    PLUGIN_ROOT="$SANDBOX/wizard-plugin-root"
+    mkdir -p "$_CONFIG_STAGE" "$PLUGIN_ROOT/portable-package"
+    printf '{}\n' > "$PLUGIN_ROOT/portable-package/plugin.json"
+    CONFIGURE_BINARY="$SANDBOX/wizard-helper"
+    printf '%s\n' '#!/bin/sh' \
+        'if [ "$1 $2" = "setup-notifications --help" ]; then echo "--policy-only --preserve-enabled"; fi' > "$CONFIGURE_BINARY"
+    chmod +x "$CONFIGURE_BINARY"
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) ;;
+        *) cygpath() { [ "$1" = -w ] || return 2; printf 'C:\\TEST stage\\%s\n' "${2##*/}"; } ;;
+    esac
+    expected_intent=$(cygpath -w "$_SELECTOR_INTENT")
+    expected_progress=$(cygpath -w "$_PROGRESS_JOURNAL")
+    trace="$SANDBOX/wizard-install-argv"
+    bootstrap_external() {
+        if [ "$2 $3 $4 $5" = "setup-notifications wizard --action install" ]; then
+            printf '%s\0' "$@" > "$trace"
+        fi
+        printf '{"targets":[]}\n'
+    }
+    wizard_tool_status() { printf 'disabled\n'; }
+    setup_agent_notify_wizard >/dev/null
+    argv=()
+    while IFS= read -r -d '' part; do argv+=("$part"); done < "$trace"
+    for key in --bootstrap-intent-file --bootstrap-progress-file --bootstrap-ready-clients; do
+        found=false
+        for ((i=0; i<${#argv[@]}-1; i++)); do
+            if [ "${argv[i]}" = "$key" ]; then
+                case "$key" in
+                    --bootstrap-intent-file) expected="$expected_intent" ;;
+                    --bootstrap-progress-file) expected="$expected_progress" ;;
+                    --bootstrap-ready-clients) expected=claude ;;
+                esac
+                [ "${argv[i+1]}" = "$expected" ] || { echo "Incorrect Git Bash wizard $key" >&2; exit 1; }
+                found=true
+                break
+            fi
+        done
+        [ "$found" = true ] || { echo "Git Bash wizard missed $key" >&2; exit 1; }
+    done
+    cygpath() { [ "$2" != "$_PROGRESS_JOURNAL" ] || return 69; printf '%s\n' "$expected_intent"; }
+    rm -f "$trace"
+    if setup_agent_notify_wizard >/dev/null; then echo "Wizard ignored failed progress path conversion" >&2; exit 1; fi
+    [ ! -e "$trace" ] || { echo "Wizard helper ran after progress conversion failure" >&2; exit 1; }
+)
 # CHLD from the job-list queries reproduces Bash's adjacent-substitution trap
 # parser failure without timing a signal. The shell itself is never its child.
 bash -c '

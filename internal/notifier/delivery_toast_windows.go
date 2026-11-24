@@ -15,9 +15,9 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/777genius/agent-notifications/internal/commandrun"
+	"github.com/777genius/agent-notifications/internal/desktopinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 	"github.com/777genius/agent-notifications/internal/notification"
-	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 	"github.com/777genius/agent-notifications/internal/windowscallback"
 )
 
@@ -133,7 +133,7 @@ func openOpenCodeWindowsToast(ctx context.Context) (windowsToastSession, error) 
 	if err != nil {
 		return nil, err
 	}
-	return windowsPowerShellToastSession{appID: opencodeinstall.OpenCodeToastAppID, controlRoot: root,
+	return windowsPowerShellToastSession{appID: desktopinstall.OpenCodeToastAppID, controlRoot: root,
 		executable: executable, requireOpenCodeShortcut: true, callback: windowscallback.NewPort()}, nil
 }
 
@@ -145,7 +145,7 @@ func (s windowsPowerShellToastSession) Ready(ctx context.Context) error {
 		return s.trustedReady(ctx)
 	}
 	if s.requireOpenCodeShortcut {
-		return opencodeinstall.WindowsShortcutReady(s.controlRoot, s.executable)
+		return desktopinstall.WindowsShortcutReady(s.controlRoot, s.executable)
 	}
 	return nil
 }

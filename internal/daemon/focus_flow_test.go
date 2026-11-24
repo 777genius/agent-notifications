@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -79,7 +80,7 @@ func TestFocusFlowPreservesWarpAndZellij(t *testing.T) {
 			if !response.Success || response.NotificationID != 17 {
 				t.Fatalf("response = %+v", response)
 			}
-			if got := server.focusCtx[17]; got != hints {
+			if got := server.focusCtx[17]; !reflect.DeepEqual(got, hints) {
 				t.Fatalf("stored hints = %+v, want %+v", got, hints)
 			}
 			server.onActionInvoked(&notify.ActionInvokedSignal{ID: 17, ActionKey: "default"})

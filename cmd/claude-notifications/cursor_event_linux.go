@@ -10,5 +10,5 @@ import (
 
 // The gate wrapper owns the single retained lease; this backend is bare.
 func newCursorDesktopPort(portable.Binding, string) notification.DeliveryPort {
-	return notifier.NewFreedesktopDelivery(notifier.SystemBootClock{})
+	return notifier.NewTerminalDesktopDelivery(notifier.SystemBootClock{})
 }

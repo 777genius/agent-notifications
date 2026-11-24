@@ -276,6 +276,32 @@ test('native V2 marker consumption, sparse seq14->16 and original run/terminal I
   assert.equal(h.facts[1].provenance.nativeTime,end.created);
  }finally{await h.stop();}
 });
+// Real 2.2.6 auto-compaction replaces the user row with a marker derived from
+// the compaction-start event. Only the same live run and exact marker qualify.
+test('native V2 completion after automatic compaction retains user lineage',async()=>{
+ for(const mode of ['valid','manual','missing-end','wrong-marker','new-user','wrong-start-scope','wrong-end-scope','stale-start']){
+  const h=v2();try{
+   await until(()=>h.markers()===1);const run=h.birth();
+   const start=h.event('session.compaction.started',{reason:mode==='manual'?'manual':'auto'},mode==='stale-start'?2:undefined,
+    {directory:mode==='wrong-start-scope'?'/OTHER':directory});
+   if(mode!=='missing-end')h.event('session.compaction.ended',{reason:mode==='manual'?'manual':'auto'},undefined,
+    {directory:mode==='wrong-end-scope'?'/OTHER':directory});
+   if(mode==='new-user'){
+    h.event('session.inbox.enqueued',{inboxID:'new-user',item:{type:'user'}});
+    h.event('session.inbox.delivered',{inboxID:'new-user'});
+   }
+   h.event('session.step.started',{assistantMessageID:'msg_assistant',type:'assistant'});
+   h.event('session.step.ended',{assistantMessageID:'msg_assistant',type:'assistant'});
+   const end=h.event('session.execution.succeeded');
+   h.setRows([{id:mode==='wrong-marker'?'msg_other':`msg_${start.id.slice(4)}`,type:'compaction'},
+    {id:'msg_assistant',type:'assistant',finish:'stop',time:{created:1700000000005,completed:end.created}},
+    {id:`msg_${end.id.slice(4)}`,type:'idle'}]);
+   if(mode==='valid'){
+    await until(()=>h.facts.length===1);assert.equal(h.facts[0].turnID,run.id);
+   }else {for(let i=0;i<30;i++)await pause();assert.deepEqual(h.facts,[],mode);}
+  }finally{await h.stop();}
+ }
+});
 // Red if a close event during all asynchronous preparation can spawn a question.
 test('native V2 close during beforeEmit suppresses the final marker/effect',async()=>{
  let release,reached=false;const held=new Promise(r=>release=r);
@@ -560,4 +586,49 @@ for(const kind of ['question_asked','terminal_error'])test(`native V1 ${kind} re
   assert.equal(h.facts.length,1);assert.equal(h.facts[0].kind,kind);
   assert.deepEqual(later,['get','messages']);
  }finally{h.dispose();}
+});
+
+// An output-limit failure belongs to the exact terminal idle row, not the
+// preceding assistant. Unrelated or cancelled idle rows grant no authority.
+test('native V2 binds output-limit error to its terminal idle',async()=>{
+ for(const mode of ['output-limit','wrong-id','cancelled','cancelled-assistant','wrong-outcome']){
+  const h=v2();try{
+   await until(()=>h.markers()===1);h.birth();
+   h.event('session.step.ended',{assistantMessageID:'msg_assistant',type:'assistant'});
+   const end=h.event('session.execution.failed');
+   h.setRows([{id:'inbox-user',type:'user'},{id:'msg_assistant',type:'assistant',finish:'length',time:{created:1700000000005,completed:end.created},...(mode==='cancelled-assistant'?{error:{type:'cancelled'}}:{})},
+    {id:mode==='wrong-id'?'msg_other':`msg_${end.id.slice(4)}`,type:'idle',outcome:mode==='wrong-outcome'?'success':'failed',error:{type:mode==='cancelled'?'cancelled':'output-limit'}}]);
+   if(mode==='output-limit'){await until(()=>h.facts.length===1);assert.equal(h.facts[0].kind,'terminal_error');assert.equal(h.facts[0].provenance.nativeEventID,end.id);}
+   else {await until(()=>h.diagnostics.includes('terminal_assistant_unverified'));assert.equal(h.facts.length,0);}
+  }finally{await h.stop();}
+ }
+});
+
+ // The native adapter is a separate fail-closed port even when an upstream
+ // source violates its declared event-ID shape. Invalid IDs cannot crash the
+ // final source read or turn into an authorized completion.
+test('native V2 rejects malformed terminal IDs without throwing from native read', async () => {
+  for (const badID of [undefined, null, 42, {}, '']) {
+    const location = {directory, project:{id:'project'}};
+    const context = {session:{
+      get: async () => ({id:'s', projectID:'project', location:{directory}}),
+      context: async () => [
+        {id:'user', type:'user'},
+        {id:'msg_assistant', type:'assistant', finish:'stop', time:{created:1700000000001, completed:1700000000002}},
+        {id:'msg_other', type:'idle'},
+      ],
+    }};
+    const view = createNativeV2(context, location, () => {}, () => {throw Error('capacity');});
+    const send = (type, id, data={}) => view.native.correlate({
+      type, id, created:1700000000002, data:{sessionID:'s', ...data},
+    });
+    send('session.execution.started', 'evt_run');
+    send('session.inbox.enqueued', 'evt_queue', {inboxID:'user', item:{type:'user'}});
+    send('session.inbox.delivered', 'evt_deliver', {inboxID:'user'});
+    send('session.step.started', 'evt_step', {assistantMessageID:'msg_assistant', type:'assistant'});
+    send('session.step.ended', 'evt_step_end', {assistantMessageID:'msg_assistant', type:'assistant'});
+    send('session.execution.succeeded', badID);
+    const run = {sessionID:'s', turnID:'evt_run', userID:'user', messageID:'msg_assistant'};
+    assert.equal(await view.native.assistant(run, new AbortController().signal), undefined);
+  }
 });

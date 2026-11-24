@@ -1,6 +1,6 @@
 //go:build darwin || windows
 
-package opencodeinstall
+package desktopinstall
 
 import (
 	"errors"
@@ -16,7 +16,7 @@ type desktopIdentity struct {
 func identityFor(product DesktopProduct) (desktopIdentity, error) {
 	switch product {
 	case OpenCodeDesktop:
-		return desktopIdentity{consumerID, "OpenCode", OpenCodeToastAppID, shortcutName, "opencode-native-spool"}, nil
+		return desktopIdentity{OpenCodeConsumerID, "OpenCode", OpenCodeToastAppID, shortcutName, "opencode-native-spool"}, nil
 	case GeminiDesktop:
 		return desktopIdentity{GeminiConsumerID, "Gemini", GeminiToastAppID, "Gemini Notifications.lnk", "gemini-native-spool"}, nil
 	case CopilotVSCodeDesktop:

@@ -141,6 +141,7 @@ func TestContextLinuxCapturesOriginHintsAndNeverFallsBack(t *testing.T) {
 	t.Setenv("TMUX", "")
 	t.Setenv("ZELLIJ", "")
 	t.Setenv("TERMINAL_EMULATOR", "")
+	t.Setenv("SWAYSOCK", testHookSwaySocket)
 	listener, err := net.Listen("unix", daemon.GetSocketPath())
 	if err != nil {
 		t.Fatal(err)
@@ -184,6 +185,10 @@ func TestContextLinuxCapturesOriginHintsAndNeverFallsBack(t *testing.T) {
 		if req.Notify.FocusWindowID != "12345" || req.Notify.FocusFolder != "native-project" || req.Notify.FocusTarget != "xterm" {
 			t.Fatalf("origin lost: %+v", req.Notify)
 		}
+		if req.Notify.FocusSwaySocket != testHookSwaySocket {
+			t.Fatalf("sway socket lost: %+v", req.Notify)
+		}
+		assertHookAncestry(t, req.Notify.FocusAncestorPIDs)
 	case <-ctx.Done():
 		t.Fatal("no notification")
 	}

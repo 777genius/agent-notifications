@@ -17,7 +17,22 @@ type Message struct {
 	Timestamp         string         `json:"timestamp"`
 	IsApiErrorMessage bool           `json:"isApiErrorMessage,omitempty"`
 	Error             string         `json:"error,omitempty"`
+	// Origin says who produced a user record. Claude Code writes it on user
+	// input records (for example {"kind":"human"} for typed input); older
+	// versions omit it.
+	Origin *Origin `json:"origin,omitempty"`
+	// IsCompactSummary marks the summary record written when a conversation
+	// is compacted; it continues the turn that was running, not a new one.
+	IsCompactSummary bool `json:"isCompactSummary,omitempty"`
 }
+
+// Origin identifies the producer of a user record.
+type Origin struct {
+	Kind string `json:"kind,omitempty"`
+}
+
+// OriginKindHuman is the origin kind Claude Code writes for typed user input.
+const OriginKindHuman = "human"
 
 // MessageContent represents the content of a message
 // Content can be either a string (user text messages) or an array (tool results, assistant messages)
@@ -299,6 +314,90 @@ func GetLastUserTimestamp(messages []Message) string {
 		}
 	}
 	return ""
+}
+
+// TurnOrigin reports who started the current turn: the origin kind of the
+// input that Claude was responding to. known is false when no user record in
+// the transcript carries an origin kind, which is the case for transcripts
+// written before Claude Code recorded origins.
+//
+// A turn's input is the batch of user records (not tool results) between the
+// previous assistant record and the next one. Claude Code also writes user
+// records inside a running turn: skill instructions and compaction summaries
+// after a tool result, queued notifications. A batch that follows a tool
+// result, or that holds only a compaction summary, continues an earlier turn,
+// so the search moves on to the batch before it. Within the batch that
+// started the turn, any human input makes the turn human; otherwise kind is
+// the newest origin kind in it, or "" when none of its records carries one.
+func TurnOrigin(messages []Message) (kind string, known bool) {
+	for i := range messages {
+		if isUserInput(messages[i]) && messages[i].Origin != nil && messages[i].Origin.Kind != "" {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return "", false
+	}
+
+	i := len(messages) - 1
+	for {
+		// Find the newest user input at or before i.
+		for i >= 0 && !isUserInput(messages[i]) {
+			i--
+		}
+		if i < 0 {
+			return "", true
+		}
+
+		// Collect the batch: user inputs back to the previous assistant
+		// record or tool result. Other record types are skipped.
+		kind = ""
+		human, compactSummary, nonSummary := false, false, false
+		for ; i >= 0; i-- {
+			msg := messages[i]
+			if msg.Type == "assistant" || isToolResult(msg) {
+				break
+			}
+			if !isUserInput(msg) {
+				continue
+			}
+			if msg.IsCompactSummary {
+				compactSummary = true
+			} else {
+				nonSummary = true
+			}
+			if msg.Origin != nil && msg.Origin.Kind != "" {
+				if msg.Origin.Kind == OriginKindHuman {
+					human = true
+				}
+				if kind == "" {
+					kind = msg.Origin.Kind
+				}
+			}
+		}
+		if human {
+			return OriginKindHuman, true
+		}
+		midTurn := i >= 0 && isToolResult(messages[i])
+		if !midTurn && (kind != "" || nonSummary || !compactSummary) {
+			return kind, true
+		}
+		// The batch continues an earlier turn; inspect the batch before it.
+	}
+}
+
+// isToolResult reports whether msg is a user record carrying tool results.
+func isToolResult(msg Message) bool {
+	return msg.Type == "user" && len(msg.Message.Content) > 0 && msg.Message.Content[0].Type == "tool_result"
+}
+
+// isUserInput reports whether msg is a user record that is not a tool result.
+func isUserInput(msg Message) bool {
+	if msg.Type != "user" || isToolResult(msg) {
+		return false
+	}
+	return msg.Message.ContentString != "" || len(msg.Message.Content) > 0
 }
 
 // GetLastAssistantTimestamp returns the timestamp of the last assistant message

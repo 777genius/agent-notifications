@@ -102,6 +102,7 @@ func TestGetFocusMethods_Order(t *testing.T) {
 		"GNOME Shell Eval (by window title)",
 		"GNOME Shell Eval (by app)",
 		"GNOME Shell FocusApp",
+		"sway (by process)",
 		"wlrctl",
 		"kdotool",
 		"xdotool",

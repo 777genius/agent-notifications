@@ -2,6 +2,7 @@ name: Pi installed Windows product
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/pi-installed-windows.yml'
       - 'scripts/pi-*'
@@ -41,6 +42,7 @@ concurrency:
 
 jobs:
   build-process:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: Actual installed Pi / Windows process compatibility
     runs-on: windows-2025
     timeout-minutes: 25

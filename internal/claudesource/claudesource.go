@@ -203,7 +203,7 @@ func decodeWithIO(ctx context.Context, hookEvent string, input io.Reader) (hooks
 			ToolInput: append(json.RawMessage(nil), wire.ToolInput...),
 		}
 	case "Notification":
-		event.Payload = hooks.NotificationPayload{}
+		event.Payload = hooks.NotificationPayload{NotificationType: wire.NotificationType, Message: wire.Message}
 	case "Stop":
 		event.Payload = hooks.StopPayload{
 			AssistantMessage: restoreString(observed.lastAssistantMessage, wire.LastAssistantMessage, restored),

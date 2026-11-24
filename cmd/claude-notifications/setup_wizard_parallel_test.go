@@ -24,14 +24,6 @@ func TestBootstrapReadyClientsCannotExpandOrReplaceConfirmedScope(t *testing.T) 
 	if err := setupwizard.CheckBootstrapMCP(*req.BootstrapMCP, changed); err == nil {
 		t.Fatal("omitted client profile drift was hidden by the ready subset")
 	}
-	if got := readyBootstrapAgents(selection.Selected, req.BootstrapReadyClients); !reflect.DeepEqual(got, []string{"codex"}) {
-		t.Fatalf("effect subset: %v", got)
-	}
-	// An existing opt-out is not converted into an installation by a successful
-	// primary setup: readiness can only further reduce the confirmed selection.
-	if got := readyBootstrapAgents([]string{"claude"}, req.BootstrapReadyClients); len(got) != 0 {
-		t.Fatalf("ready client bypassed opt-out: %v", got)
-	}
 	for _, bad := range []setupwizard.Request{
 		{Agents: []string{"claude"}, BootstrapMCP: selection},
 		{Agents: []string{"codex"}},

@@ -5,6 +5,7 @@
 package notifier
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -46,18 +47,18 @@ func sendWindowsNotification(title, body, appIcon string, cfg *config.Config, cw
 }
 
 // sendLinuxNotification sends a notification on Linux.
-// When clickToFocus is enabled, uses the daemon for click-to-focus support.
-// Falls back to beeep when daemon is unavailable.
-// cwd is the working directory of the project; used for window-specific focus. May be empty.
-func sendLinuxNotification(title, body, appIcon string, cfg *config.Config, cwd string) error {
-	// If click-to-focus is disabled, use beeep directly
-	if !cfg.Notifications.Desktop.ClickToFocus {
+// The daemon is used when focus is set (click-to-focus) or replaceKey is set
+// (the session's previous notification is replaced, which needs the daemon's
+// per-session notification ids). Falls back to beeep when the daemon is
+// unavailable. cwd is the working directory of the project; used for
+// window-specific focus. May be empty.
+func sendLinuxNotification(title, body, appIcon string, cfg *config.Config, cwd string, focus bool, replaceKey string) error {
+	if !focus && replaceKey == "" {
 		logging.Debug("Click-to-focus disabled, using beeep directly")
 		return beeep.Notify(title, body, appIcon)
 	}
 
-	// Try to use daemon for click-to-focus
-	if err := sendViaDaemon(title, body, appIcon, cwd, cfg); err == nil {
+	if err := sendViaDaemon(title, body, appIcon, cwd, cfg, focus, replaceKey); err == nil {
 		logging.Debug("Notification sent via daemon with click-to-focus support")
 		return nil
 	} else {
@@ -71,7 +72,9 @@ func sendLinuxNotification(title, body, appIcon string, cfg *config.Config, cwd 
 // sendViaDaemon sends a notification via the background daemon.
 // Returns an error if daemon is not available or fails.
 // cwd is used to extract the project folder name for window-specific focus.
-func sendViaDaemon(title, body, appIcon, cwd string, cfg *config.Config) error {
+// Without focus the notification has no click action; a non-empty replaceKey
+// replaces that session's previous notification.
+func sendViaDaemon(title, body, appIcon, cwd string, cfg *config.Config, focus bool, replaceKey string) error {
 	// Start daemon on-demand (no-op if already running)
 	if !daemon.StartDaemonOnDemand() {
 		return daemon.ErrDaemonNotAvailable
@@ -80,6 +83,12 @@ func sendViaDaemon(title, body, appIcon, cwd string, cfg *config.Config) error {
 	// Create client and send notification
 	client, err := daemon.NewClient()
 	if err != nil {
+		return err
+	}
+
+	opts := daemon.NotifyOptions{ReplaceKey: replaceKey, NoFocus: !focus}
+	if !focus {
+		_, err = client.SendNotificationWithOptionsContext(context.Background(), title, body, appIcon, daemon.FocusHints{}, 30, opts)
 		return err
 	}
 
@@ -99,6 +108,10 @@ func sendViaDaemon(title, body, appIcon, cwd string, cfg *config.Config) error {
 	wezTermPaneID, wezTermSocket := daemon.GetWezTermFocusHints(focusTarget)
 	warpFocusURL := warpfocus.FromEnv()
 
+	// Sway names a window by the process that owns it, so the hook records its own
+	// ancestry for the daemon to match against Sway's window tree.
+	swaySocket, ancestorPIDs := daemon.GetSwayFocusHints()
+
 	hints := daemon.FocusHints{
 		TerminalName:  focusTarget,
 		FolderName:    folderName,
@@ -109,6 +122,8 @@ func sendViaDaemon(title, body, appIcon, cwd string, cfg *config.Config) error {
 		WezTermPaneID: wezTermPaneID,
 		WezTermSocket: wezTermSocket,
 		WarpFocusURL:  warpFocusURL,
+		SwaySocket:    swaySocket,
+		AncestorPIDs:  ancestorPIDs,
 	}
 
 	// Zellij is not tied to a focus target the way WezTerm is: it runs inside
@@ -116,7 +131,7 @@ func sendViaDaemon(title, body, appIcon, cwd string, cfg *config.Config) error {
 	// every terminal.
 	applyZellijFocusHints(cfg, &hints)
 
-	_, err = client.SendNotification(title, body, appIcon, hints, 30)
+	_, err = client.SendNotificationWithOptionsContext(context.Background(), title, body, appIcon, hints, 30, opts)
 	return err
 }
 

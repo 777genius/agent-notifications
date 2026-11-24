@@ -261,3 +261,66 @@ PAYLOAD
  [ -L "$SCRIPT_DIR/claude-notifications" ]
 )
 echo 'PASS: disposable acquisition may still publish a local launcher'
+
+
+# Exercise the real staged Linux promotion adapter with a verified-helper fake.
+# The Go cache-repair kernel and its recovery CAS are covered by Go E2E tests;
+# this boundary test catches missing, reordered or env-redirected shell calls.
+for repair_result in success refuse; do
+ (
+  export INSTALL_TARGET_DIR="$sandbox/linux-cache-$repair_result"
+  mkdir -p "$INSTALL_TARGET_DIR"
+  source "$sandbox/functions.sh"
+  detect_platform() {
+   PLATFORM=linux ARCH=amd64 BINARY_NAME=claude-notifications-linux-amd64
+   BINARY_PATH="$SCRIPT_DIR/$BINARY_NAME"
+  }
+  detect_platform
+  ln -s claude-notifications-darwin-arm64 "$SCRIPT_DIR/claude-notifications"
+  export AGENT_NOTIFICATIONS_CONTROL_ROOT="$sandbox/untrusted-override"
+  export CACHE_REPAIR_SPY="$sandbox/linux-cache-$repair_result/calls"
+  export CACHE_REPAIR_RESULT="$repair_result"
+  download_and_verify_binary() {
+   cat > "$BINARY_PATH" <<'PAYLOAD'
+#!/bin/sh
+# agent-notifications-managed-writer-protocol-v1
+case "$1:$2" in
+ setup-products:repair-capabilities)
+  printf 'cache-repair-v1\n' ;;
+ setup-products:repair-cache)
+  [ -z "${AGENT_NOTIFICATIONS_CONTROL_ROOT:-}" ] || exit 31
+  [ "$(readlink "$INSTALL_TARGET_DIR/claude-notifications")" = claude-notifications-darwin-arm64 ] || exit 32
+  printf 'repair\n' >> "$CACHE_REPAIR_SPY"
+  [ "$CACHE_REPAIR_RESULT" != refuse ] || exit 33
+  ln -sf claude-notifications-linux-amd64 "$INSTALL_TARGET_DIR/claude-notifications" ;;
+ internal-install-runtime:--stage)
+  [ "$CACHE_REPAIR_RESULT" = success ] || exit 34
+  [ "$(cat "$CACHE_REPAIR_SPY")" = repair ] || exit 35
+  [ "$(readlink "$INSTALL_TARGET_DIR/claude-notifications")" = claude-notifications-linux-amd64 ] || exit 36
+  cp "$0" "$INSTALL_TARGET_DIR/claude-notifications-linux-amd64"
+  printf 'publish\n' >> "$CACHE_REPAIR_SPY" ;;
+ *) exit 37 ;;
+esac
+PAYLOAD
+   chmod +x "$BINARY_PATH"
+  }
+  verify_executable() { LC_ALL=C grep -aqF agent-notifications-managed-writer-protocol-v1 "$BINARY_PATH"; }
+  guard_install_paths() { :; }
+  install_linux_notification_desktop_entry() { :; }
+  if [ "$repair_result" = success ]; then
+   stage_and_promote_runtime
+   [ "$(cat "$CACHE_REPAIR_SPY")" = "$(printf 'repair\npublish')" ]
+   [ -f "$SCRIPT_DIR/claude-notifications-linux-amd64" ]
+   [ "$(readlink "$SCRIPT_DIR/claude-notifications")" = claude-notifications-linux-amd64 ]
+  else
+   if stage_and_promote_runtime; then
+    echo 'rejected cache repair incorrectly allowed runtime promotion' >&2
+    exit 1
+   fi
+   [ "$(cat "$CACHE_REPAIR_SPY")" = repair ]
+   [ ! -f "$SCRIPT_DIR/claude-notifications-linux-amd64" ]
+   [ "$(readlink "$SCRIPT_DIR/claude-notifications")" = claude-notifications-darwin-arm64 ]
+  fi
+ )
+done
+echo 'PASS: Linux staged adapter repairs exact cache before promotion, strips root override and fails closed'

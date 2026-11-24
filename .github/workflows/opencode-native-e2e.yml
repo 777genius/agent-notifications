@@ -90,7 +90,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go test -count=1 ./internal/opencodeinstall -run 'Test.*(Native|Shortcut|Desktop)'
+          go test -count=1 ./internal/opencodeinstall ./internal/desktopinstall -run 'Test.*(Native|Shortcut|Desktop)'
       - name: Guard and execute exact reviewed installed fixture
         shell: bash
         env:

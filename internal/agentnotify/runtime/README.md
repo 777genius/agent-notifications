@@ -99,3 +99,12 @@ injected clocks and fake OS delivery. A real kernel transaction fixture verifies
 both disable and generation update between released readiness and delivery.
 Actual native/GUI execution and external E2E are outside this bounded composition.
 Remaining work belongs to main/setup/CLI/MCP wiring; no such source is changed here.
+
+Portable shared-service composition owns one Backend per binding/runtime epoch,
+with the same two-submit limiter and durable rate limits. The shared adapter
+waits for a submission slot within the original call deadline; its transport
+caps all active and waiting calls at 256. It coalesces only
+overlapping policy snapshot reads; completed observations are never cached.
+Each caller retains its own context and deadline, and canceling one snapshot
+waiter does not cancel peers. Same-snapshot binding/primary validation and final
+expected-generation delivery leases remain mandatory.

@@ -300,6 +300,13 @@ else
     TESTS_FAILED=$((TESTS_FAILED + 1))
 fi
 
+# Versioned Claude cache upgrade regression (issue #585).
+if bash "$SCRIPT_DIR/installer_presentation_test.sh"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
 # Summary
 echo "========================================="
 echo " Test Summary"

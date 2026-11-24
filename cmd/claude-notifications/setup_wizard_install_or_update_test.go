@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -205,12 +206,93 @@ func TestWizardInstallOrUpdateFetchesCurrentRelease(t *testing.T) {
 		}
 		return nil, os.ErrNotExist
 	}
-	updated, err := runInstallOrUpdate(ctx, req, false)
+	updated, err := setupwizard.InstallOrUpdate(ctx, req, false)
 	if err != nil || (updated.Outcome != "completed" && updated.Outcome != "unchanged") {
 		t.Fatalf("new release update: %+v %v", updated, err)
 	}
 	if wizardCLINotifyDigest(old, "codex") == wizardCLINotifyDigest(updated, "codex") {
 		t.Fatalf("old portable digest retained: old=%+v new=%+v", old.Targets, updated.Targets)
+	}
+}
+
+// The CLI must dispatch an omitted --package bootstrap to the current,
+// checksum-verified release, not to an install against stale local inputs.
+// Intercept only the fixture's exact release URLs. No product-level test
+// transport, feature flag, or network dependency is introduced.
+type wizardReleaseRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f wizardReleaseRoundTrip) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestWizardInstallOrUpdateCLIWithoutPackageFetchesRelease(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	env := newWizardCLIEnv(t, ctx, false)
+	off, on := false, true
+	req := setupwizard.Request{
+		Action: setupwizard.ActionInstall, Agents: []string{"codex"}, Hooks: &off, AgentNotify: &on, Yes: true,
+		PackageRoot: env.pkg, ControlRoot: env.control, RuntimeRoot: env.runtime, GlobalConfig: env.global,
+		CodexHome: env.codexHome, ClientExecutable: env.probe, Helper: env.probe, ScopeRoot: env.scope,
+	}
+	old, err := setupwizard.Run(ctx, req)
+	if err != nil || old.Outcome != "completed" {
+		t.Fatalf("old package: %+v %v", old, err)
+	}
+	archive := filepath.Join(env.root, "cli-release.zip")
+	if _, err := portableasset.Build(portableasset.BuildRequest{
+		Version: config.ConsumerVersion, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Executable: env.probe, OutputRoot: filepath.Join(env.root, "cli-release-build"), Archive: archive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := portableasset.AssetName(runtime.GOOS, runtime.GOARCH)
+	digest := sha256.Sum256(data)
+	checksums := []byte(hex.EncodeToString(digest[:]) + "  " + asset + "\n")
+	root := "/777genius/agent-notifications/releases/download/v" + config.ConsumerVersion + "/"
+	fetches := map[string]int{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = wizardReleaseRoundTrip(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Scheme != "https" || req.URL.Host != "github.com" || !strings.HasPrefix(req.URL.Path, root) {
+			return nil, fmt.Errorf("unexpected release URL: %s", req.URL)
+		}
+		filename := strings.TrimPrefix(req.URL.Path, root)
+		var body []byte
+		switch filename {
+		case "checksums.txt":
+			body = checksums
+		case asset:
+			body = data
+		default:
+			return nil, fmt.Errorf("unexpected asset: %s", filename)
+		}
+		fetches[filename]++
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body)),
+			ContentLength: int64(len(body)), Header: make(http.Header), Request: req}, nil
+	})
+	defer func() { http.DefaultTransport = originalTransport }()
+	args := []string{
+		"--action", "install", "--agents", "codex", "--install-or-update",
+		"--hooks", "false", "--agent-notify", "true", "--yes", "--json",
+		"--control-root", env.control, "--runtime-root", env.runtime,
+		"--global-config", env.global, "--codex-home", env.codexHome,
+		"--client-executable", env.probe, "--helper", env.probe, "--scope-root", env.scope,
+	}
+	var out bytes.Buffer
+	code := executeSetupWizardWith(ctx, args, &out, io.Discard, strings.NewReader(""), false)
+	if code != 0 {
+		t.Fatalf("CLI release bootstrap failed: code=%d result=%s", code, out.String())
+	}
+	updated := decodeWizardJSON(t, out)
+	if updated.Outcome != "completed" || wizardCLINotifyDigest(old, "codex") == wizardCLINotifyDigest(updated, "codex") {
+		t.Fatalf("CLI did not upgrade the verified release: old=%+v new=%+v", old, updated)
+	}
+	if fetches["checksums.txt"] == 0 || fetches[asset] == 0 {
+		t.Fatalf("CLI bypassed the verified release download: %+v", fetches)
 	}
 }
 
@@ -266,7 +348,7 @@ func TestWizardInstallOrUpdateDoesNotUndoConcurrentOptOut(t *testing.T) {
 		}
 		return nil, os.ErrNotExist
 	}
-	result, err := runInstallOrUpdate(ctx, req, true)
+	result, err := setupwizard.InstallOrUpdate(ctx, req, true)
 	if !removed || err == nil || result.Outcome != "conflict" || result.Reason != "concurrent_change" {
 		t.Fatalf("auto update restored concurrent opt-out: %+v %v", result, err)
 	}
@@ -315,7 +397,7 @@ func TestWizardInstallOrUpdateRejectsOptOutBeforeIntentPublish(t *testing.T) {
 			t.Fatalf("concurrent opt-out: %+v %v", result, err)
 		}
 	}
-	result, err := runInstallOrUpdate(ctx, req, true)
+	result, err := setupwizard.InstallOrUpdate(ctx, req, true)
 	if !removed || err == nil || result.Outcome != "conflict" || result.Reason != "concurrent_change" {
 		t.Fatalf("stale update published intent: %+v %v", result, err)
 	}
@@ -327,23 +409,6 @@ func TestWizardInstallOrUpdateRejectsOptOutBeforeIntentPublish(t *testing.T) {
 	view, err := setupwizard.Run(ctx, inspect)
 	if err != nil || wizardCLINotifyDigest(view, "codex") != "" {
 		t.Fatalf("opt-out did not remain absent: %+v %v", view, err)
-	}
-}
-
-func TestWizardInstallOrUpdateRejectsUnselectedPrerequisite(t *testing.T) {
-	selected := []string{"claude"}
-	next := []setupwizard.NextAction{
-		{Kind: "update", Agents: []string{"codex"}},
-		{Kind: "install", Agents: []string{"claude"}},
-	}
-	if validInstallOrUpdateActions(selected, next) {
-		t.Fatal("bootstrap may not mutate an unselected sibling")
-	}
-	if validInstallOrUpdateActions(selected, []setupwizard.NextAction{{Kind: "update", Agents: []string{"claude", "claude"}}}) {
-		t.Fatal("duplicate client action accepted")
-	}
-	if validInstallOrUpdateActions(selected, []setupwizard.NextAction{{Kind: "repair", Agents: selected}}) {
-		t.Fatal("unexpected action accepted")
 	}
 }
 

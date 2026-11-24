@@ -22,7 +22,7 @@ import (
 )
 
 const runtimeReceiptGolden = "{\"protocol\":1,\"semantic\":\"unverified\",\"generation\":\"none\",\"resourceClosure\":\"reaped_or_not_started\"}\n"
-const qualifiedReceiptGolden = "{\"protocol\":1,\"semantic\":\"eligible\",\"generation\":\"v2\",\"resourceClosure\":\"reaped_or_not_started\"}\n"
+const qualifiedReceiptGolden = "{\"protocol\":1,\"semantic\":\"eligible\",\"generation\":\"v2\",\"resourceClosure\":\"reaped_or_not_started\",\"version\":\"2.0.21\"}\n"
 
 // Ordinary independent TEST native bytes. The serve process itself starts and
 // waits for the helper: the purported host and helper must never be siblings.
@@ -322,7 +322,15 @@ func TestRuntimeProfileActualProbeResultsWaitBeforeTypedReceipt(t *testing.T) {
 				qualify = ""
 			}
 			launchProfileHelper(t, in, in, "", qualify)
-			assertProfileReceipt(t, profileOutput(t, in))
+			if mode == "success" {
+				// No test authority here: the production family admission decides, and a
+				// V2 release inside the range is eligible on Linux without a reviewed image.
+				if got := string(profileOutput(t, in)); got != qualifiedReceiptGolden {
+					t.Fatalf("family admission receipt: %q", got)
+				}
+			} else {
+				assertProfileReceipt(t, profileOutput(t, in))
+			}
 			assertNoQualification(t, in)
 			if mode == "startfailure" {
 				assertNoProbe(t, in)

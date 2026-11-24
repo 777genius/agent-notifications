@@ -234,7 +234,7 @@
     "scrollDown": "向下滚动选项"
   },
   "install": {
-    "availability": "统一的 Cursor/Qoder/Pi 安装流程已在平台版本 v1.50.0 中提供。 Cursor CLI、Qoder 和 Pi 使用统一安装程序，并分别选择通知渠道。", "cursor": {"guide": "安装 Cursor CLI", "scope": "Cursor CLI：在 Linux amd64、macOS arm64 和 Windows amd64 上提供提示性的 Stop 通知和可选 Webhook。不支持 Cursor IDE、声音或点击聚焦。安装程序会验证所选 CLI 和用户配置目录。", "restart": "重启 Cursor CLI 以加载 Stop 通知观察器。"},
+    "availability": "Cursor CLI、Qoder 和 Pi 使用统一安装程序，并分别选择通知渠道。", "cursor": {"guide": "安装 Cursor CLI", "scope": "Cursor CLI：在 Linux amd64、macOS arm64 和 Windows amd64 上提供提示性的 Stop 通知和可选 Webhook。不支持 Cursor IDE 或点击聚焦。安装程序会验证所选 CLI 和用户配置目录。", "restart": "重启 Cursor CLI 以加载 Stop 通知观察器。"},
     "qoder": {"guide": "Qoder 设置与钩子", "scope": "Qoder：完成、提问、权限、计划和团队成员通知，以及可选 Webhook。可在统一安装程序中与其他代理一起选择；点击通知无法打开准确的现有聊天。", "restart": "重启 Qoder 以启用钩子。"},
     "title": "设置通知",
     "intro": "按照以下步骤为 {agent} 添加通知。",
@@ -320,8 +320,8 @@
       "details": "兼容性详情",
       "claude": "提供完成、审查、提问、计划、会话限制和 API 错误通知。在支持的环境中提供声音和点击返回功能。",
       "codex": "提供完成和权限通知。在支持的环境中提供声音和点击返回功能。请在 /hooks 中审查并信任已安装的钩子。",
-      "opencode": "仅为根会话提供静音的完成、提问、权限和错误通知。不支持声音或点击返回。",
-      "gemini": "Gemini CLI (macOS / Linux / Windows)：静默提示回合结束和工具权限请求。回合结束不代表成功或最终答复。不支持声音、点击聚焦、问题、错误、计划、审查通知或嵌套代理功能对等。"
+      "opencode": "仅为根会话提供完成、提问、权限和错误通知。不支持点击返回。",
+      "gemini": "Gemini CLI (macOS / Linux / Windows)：提示回合结束和工具权限请求。回合结束不代表成功或最终答复。不支持点击聚焦、问题、错误、计划、审查通知或嵌套代理功能对等。"
     },
     "gemini": {
       "version": "不限制 Gemini CLI 版本。支持 macOS / Linux / Windows。已测试版本和平台范围见 Gemini 指南。",
@@ -336,7 +336,7 @@
     "opencode": {
       "channelsTitle": "OpenCode 通知渠道",
       "channelsHint": "这些选项仅适用于 OpenCode。请允许至少一个渠道；Webhook URL 需单独配置。",
-      "scope": "OpenCode：为根会话的完成、问题、权限请求和错误发送静默提醒。不支持声音或点击聚焦。",
+      "scope": "OpenCode: 仅为根会话提供完成、提问、权限和错误通知。不支持点击返回。",
       "version": "不限制 OpenCode CLI 版本。已测试版本和平台范围见设置指南。",
       "desktop": "允许桌面通知",
       "webhook": "允许 Webhook 通知",
@@ -362,7 +362,7 @@
     "no": "不支持",
     "conditional": "支持，但有限制",
     "legend": "✓ 支持 · ✕ 不支持 · ✓* 有限制",
-    "conditions": "* Codex 的提问取决于当前模式；错误和限额通过最终消息识别。点击聚焦取决于操作系统和终端。",
+    "conditions": "* Codex 的提问取决于当前模式；错误和限额通过最终消息识别。点击聚焦取决于操作系统和终端。 OpenCode、Gemini CLI 和 Cursor CLI：通过 notifications.desktop.systemSound=true 单独启用系统通知音；不支持自定义音频或点击聚焦。Qoder：通过 StopFailure 通知错误和 API 速率限制；已包含五个 MP3，但尚未验证原生可听播放。",
     "qualification": "Claude 权限请求显示为提问通知。Codex 提问钩子仍属实验功能；错误和限制通过最终消息的文本启发式规则识别。验证详情请参阅链接中的指南。",
     "v2Link": "什么是 OpenCode V2？",
     "rows": {

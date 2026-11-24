@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 from ci_release_scope import TOOLS, classify
+from ci_macos_scope import PROSE
 
 CLASSIFIER = Path(__file__).with_name('ci_release_scope.py').resolve()
 IDENTITY = {'GIT_AUTHOR_NAME': 'iliya', 'GIT_AUTHOR_EMAIL': 'iliyazelenkog@gmail.com',
@@ -31,6 +32,8 @@ class ScopeFixture(unittest.TestCase):
         self.git('init', '-q')
         self.git('config', 'core.filemode', 'true')
         self.write('scripts/release-progress.mts', 'original\n')
+        for path in PROSE:
+            self.write(path, 'original prose\n')
         self.git('add', '.')
         self.check_identity()
         self.git('commit', '-qm', 'test: fixture base')
@@ -73,6 +76,41 @@ class ScopeFixture(unittest.TestCase):
             self.write(path, 'reviewed operator change\n')
         self.commit()
         self.assertEqual(self.mode(), 'mode=release-tools')
+
+    def test_exact_existing_prose_only_keeps_native_ci_lightweight(self):
+        for path in PROSE:
+            self.write(path, 'revised prose\n')
+        head = self.commit()
+        self.assertEqual(self.mode(), 'mode=docs')
+        good = event(self.base, head)
+        full = copy.deepcopy(good)
+        full['pull_request']['labels'].append({'name': 'ci:full'})
+        self.assertEqual(self.mode(payload=full), 'mode=full')
+        fork = copy.deepcopy(good)
+        fork['pull_request']['head']['repo']['full_name'] = 'fork/repo'
+        self.assertEqual(self.mode(payload=fork), 'mode=full')
+        self.assertEqual(self.mode('push', good), 'mode=full')
+        self.write('cmd/product.go', 'product change\n')
+        self.commit()
+        self.assertEqual(self.mode(), 'mode=full')
+
+    def test_prose_add_delete_mode_and_symlink_force_full(self):
+        for operation in ['add', 'delete', 'mode', 'symlink']:
+            with self.subTest(operation=operation):
+                self.git('reset', '--hard', self.base)
+                self.git('clean', '-fdq')
+                target = self.root / 'README.md'
+                if operation == 'add':
+                    self.write('docs/NEW.md', 'new file\n')
+                elif operation == 'delete':
+                    target.unlink()
+                elif operation == 'mode':
+                    target.chmod(0o755)
+                else:
+                    target.unlink()
+                    target.symlink_to('docs/DO_NOT_DISTURB.md')
+                self.commit()
+                self.assertEqual(self.mode(), 'mode=full')
 
     def test_product_version_ci_build_and_unknown_paths_force_full(self):
         for path in ['cmd/claude-notifications/main.go', '.claude-plugin/plugin.json',
@@ -139,6 +177,140 @@ class ScopeFixture(unittest.TestCase):
         self.write('cmd/main.go', 'base product update\n')
         base = self.commit()
         self.assertEqual(self.mode(payload=event(base, head)), 'mode=release-tools')
+
+
+
+class ClassifierRunnerPolicy(unittest.TestCase):
+    def test_read_only_scope_jobs_do_not_queue_on_native_pool(self):
+        # These jobs classify Git/Actions evidence, not native E2E. Maintain
+        # the exact final native matrices on their original qualified runners.
+        import re
+
+        root = Path(__file__).resolve().parents[1]
+        for name in ('ci-ubuntu.yml', 'ci-macos.yml', 'ci-windows.yml',
+                     'install-recovery-e2e.yml'):
+            with self.subTest(workflow=name):
+                workflow = (root / '.github/workflows' / name).read_text()
+                scope = re.search(
+                    r'(?ms)^  scope:\n(.*?)(?=^  [a-z][\w-]+:\s*$|\Z)',
+                    workflow,
+                )
+                self.assertIsNotNone(scope)
+                self.assertIn('    runs-on: ubuntu-latest\n', scope.group(1))
+                self.assertNotIn('vars.CI_LINUX_RUNNER', scope.group(1))
+                self.assertIn('CI_NATIVE_WORKFLOW:', scope.group(1))
+
+
+
+
+
+class HeavyNativeDraftTierPolicy(unittest.TestCase):
+    """Run source-accurate workflow admission checks before any native jobs."""
+
+    def test_native_draft_deferred_until_ready_without_losing_manual_or_schedule(self):
+        import re
+
+        root = Path(__file__).resolve().parents[1] / '.github' / 'workflows'
+        workflows = {
+            'pi-installed-linux.yml': ('linux',),
+            'pi-installed-macos.yml': ('macos',),
+            'pi-installed-windows.yml': ('build-process',),
+            'strict-terminal-native-linux.yml': ('strict-terminal',),
+            'pi-native-contracts.yml': ('native',),
+            'opencode-range-e2e.yml': ('range',),
+            'opencode-v226-source-e2e.yml': (
+                'actual-source', 'windows-x64-official-image', 'darwin-arm64-image'),
+        }
+        simple = "if: github.event_name != 'pull_request' || github.event.pull_request.draft != true"
+        fork = ("if: github.event_name != 'pull_request' || "
+                "(github.event.pull_request.head.repo.full_name == github.repository && "
+                "github.event.pull_request.draft != true)")
+        for filename, jobs in workflows.items():
+            with self.subTest(workflow=filename):
+                source = (root / filename).read_text()
+                header, separator, job_source = source.partition('\njobs:\n')
+                self.assertTrue(separator, filename + ': missing job declaration')
+                self.assertIn('types: [opened, synchronize, reopened, ready_for_review]', header)
+                self.assertIn('  workflow_dispatch:', header)
+                if filename == 'opencode-range-e2e.yml':
+                    self.assertIn('  schedule:', header)
+                if filename in ('pi-installed-linux.yml', 'pi-installed-macos.yml'):
+                    self.assertIn('  workflow_call:', header)
+                blocks = dict(re.findall(
+                    r'(?ms)^  ([a-z][\w-]+):\n(.*?)(?=^  [a-z][\w-]+:\s*$|\Z)',
+                    job_source,
+                ))
+                for job in jobs:
+                    self.assertIn(job, blocks, filename + ': lost E2E job')
+                    expected = fork if filename.startswith('opencode-') else simple
+                    self.assertIn('    ' + expected + '\n', blocks[job])
+                    self.assertIn('    timeout-minutes:', blocks[job])
+                    self.assertNotIn('continue-on-error: true', blocks[job])
+        win = (root / 'pi-installed-windows.yml').read_text()
+        self.assertIn(
+            "if: github.event_name == 'workflow_dispatch' && github.repository == "
+            "'777genius/agent-notifications' && github.actor == '777genius'",
+            win,
+        )
+        # Evaluate both expressions' actual event acceptance independently:
+        for kind in ('simple', 'fork'):
+            for event in ('pull_request', 'workflow_dispatch', 'schedule', 'workflow_call'):
+                for draft in (False, True):
+                    for same_repo in (False, True):
+                        accepted = event != 'pull_request' or (
+                            not draft and (same_repo or kind == 'simple'))
+                        if event != 'pull_request':
+                            self.assertTrue(accepted, (kind, event, draft))
+                        elif draft or (kind == 'fork' and not same_repo):
+                            self.assertFalse(accepted, (kind, event, draft, same_repo))
+                        else:
+                            self.assertTrue(accepted, (kind, event, draft, same_repo))
+
+
+class RemainingNativeDraftTierPolicy(unittest.TestCase):
+    """Keep native PR draft cost down without weakening Ready/manual evidence."""
+
+    def test_pinned_native_suites_run_ready_and_preserve_qualification_inputs(self):
+        import re
+        root = Path(__file__).resolve().parents[1] / '.github' / 'workflows'
+        cases = {
+            'pi-native-preflight.yml': ['prerequisites', 'windows-prerequisites'],
+            'navigation-linux-portal-owner-fence.yml': ['owner-fence'],
+            'navigation-linux-vendor-manifest.yml': ['manifest'],
+            'cursor-windows-shell.yml': ['native-shell'],
+        }
+        normal = "if: github.event_name != 'pull_request' || github.event.pull_request.draft != true"
+        trusted = ("if: github.event_name != 'pull_request' || "
+                   "(github.event.pull_request.head.repo.full_name == github.repository && "
+                   "github.event.pull_request.draft != true)")
+        for filename, expected_jobs in cases.items():
+            with self.subTest(workflow=filename):
+                source = (root / filename).read_text()
+                header, separator, jobs = source.partition('\njobs:\n')
+                self.assertTrue(separator, filename + ': jobs missing')
+                self.assertEqual(header.count('    types: [opened, synchronize, reopened, ready_for_review]'), 1)
+                self.assertIn('  pull_request:', header)
+                self.assertIn('  workflow_dispatch:', header)
+                self.assertEqual('  push:' in header, filename == 'cursor-windows-shell.yml')
+                actual = re.findall(r'(?m)^  ([a-z][\w-]+):\n', jobs)
+                self.assertEqual(sorted(actual), sorted(expected_jobs), filename + ': job closure changed')
+                blocks = dict(re.findall(r'(?ms)^  ([a-z][\w-]+):\n(.*?)(?=^  [a-z][\w-]+:\n|\Z)', jobs))
+                for job in expected_jobs:
+                    self.assertIn(job, blocks)
+                    body = blocks[job]
+                    self.assertIn('    timeout-minutes:', body)
+                    self.assertNotIn('continue-on-error: true', body)
+                    if job == 'windows-prerequisites':
+                        self.assertIn("if: github.event_name == 'workflow_dispatch' &&", body)
+                    else:
+                        self.assertIn('    ' + (trusted if filename == 'cursor-windows-shell.yml' else normal), body)
+                if filename == 'pi-native-preflight.yml':
+                    self.assertIn('platform: linux', source)
+                    self.assertIn('platform: darwin', source)
+                if filename == 'cursor-windows-shell.yml':
+                    self.assertIn('branches: [feat/cursor-windows-cli]', header)
+                    self.assertIn('github.event.pull_request.head.repo.full_name == github.repository', jobs)
+
 
 
 if __name__ == '__main__':

@@ -24,7 +24,7 @@ func TestDefaultVersionSources(t *testing.T) {
 			t.Fatal("version sources disagree")
 		}
 	}
-	workflow, err := os.ReadFile(filepath.Join(root, ".github/workflows/release.yml"))
+	workflow, err := os.ReadFile(filepath.Join(root, ".github/workflows/basic-release.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}

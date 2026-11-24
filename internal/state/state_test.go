@@ -794,3 +794,54 @@ func TestManager_IsDuplicateMessage_EmptyLastMessage(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, isDuplicate, "should not be duplicate when last message is empty")
 }
+
+func TestManager_ConsumeInteractiveToolPermissionPair(t *testing.T) {
+	now := platform.CurrentTimestamp()
+	for _, tc := range []struct {
+		name     string
+		state    *SessionState
+		cooldown int
+		want     bool
+	}{
+		{"no state", nil, 7, false},
+		{"question notified", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now, PairNotifiedTime: now, LastNotificationTime: now, LastNotificationEvent: "PreToolUse"}, 7, true},
+		{"plan notified", &SessionState{LastInteractiveTool: "ExitPlanMode", LastTimestamp: now - 6, PairNotifiedTime: now - 6, LastNotificationTime: now - 6, LastNotificationEvent: "PreToolUse"}, 7, true},
+		{"cooldown disabled", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now, PairNotifiedTime: now, LastNotificationTime: now, LastNotificationEvent: "PreToolUse"}, 0, false},
+		{"tool outside window", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now - 7, PairNotifiedTime: now - 7, LastNotificationTime: now - 7, LastNotificationEvent: "PreToolUse"}, 7, false},
+		{"tool not notified", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now}, 7, false},
+		{"notification before tool", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now, PairNotifiedTime: now - 1, LastNotificationTime: now - 1, LastNotificationEvent: "PreToolUse"}, 7, false},
+		{"unrelated notification cannot invalidate a delivered pair", &SessionState{LastInteractiveTool: "AskUserQuestion", LastTimestamp: now - 3, PairNotifiedTime: now - 3, LastNotificationTime: now - 2, LastNotificationEvent: "Notification"}, 7, true},
+		{"other tool", &SessionState{LastInteractiveTool: "Bash", LastTimestamp: now, PairNotifiedTime: now, LastNotificationTime: now, LastNotificationEvent: "PreToolUse"}, 7, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := newTestManager(t)
+			sessionID := "test-permission-pairing"
+			if tc.state != nil {
+				tc.state.SessionID = sessionID
+				require.NoError(t, mgr.Save(tc.state))
+			}
+			got, err := mgr.ConsumeInteractiveToolPermissionPair(sessionID, tc.cooldown)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+
+			// The pairing is single-use: a second prompt never matches.
+			again, err := mgr.ConsumeInteractiveToolPermissionPair(sessionID, tc.cooldown)
+			require.NoError(t, err)
+			assert.False(t, again, "pairing must be consumed")
+		})
+	}
+}
+
+func TestManager_PermissionPairSurvivesUnrelatedNotificationDelivery(t *testing.T) {
+	mgr := newTestManager(t)
+	const session = "pair-then-specific-permission"
+	require.NoError(t, mgr.UpdateInteractiveTool(session, "AskUserQuestion", "/tmp"))
+	require.NoError(t, mgr.UpdateLastNotificationWithIdentity(session, analyzer.StatusQuestion, "Question", "", "", "", "PreToolUse"))
+	require.NoError(t, mgr.UpdateLastNotificationWithIdentity(session, analyzer.StatusPermissionRequest, "Use Bash?", "", "", "", "Notification"))
+	paired, err := mgr.ConsumeInteractiveToolPermissionPair(session, 7)
+	require.NoError(t, err)
+	assert.True(t, paired, "unrelated permission delivery must not remove the pending generic echo pairing")
+	paired, err = mgr.ConsumeInteractiveToolPermissionPair(session, 7)
+	require.NoError(t, err)
+	assert.False(t, paired, "generic echo pairing is single-use")
+}

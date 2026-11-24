@@ -6,7 +6,7 @@ Clicking a notification activates your terminal window — no more hunting for t
 
 ## Supported Terminals & IDEs
 
-Quick reference before the platform-by-platform detail below. Precision levels: **pane/tab** targets the exact split or tab; **window** raises the whole app window (may land on the wrong tab if several are open); **best-effort** falls back to a generic name/title match that can pick the wrong window.
+Quick reference for **legacy Claude/Codex/Pi terminal routes** before the platform-by-platform detail below. Qoder/Gemini/Cursor have a **separate**, guarded Linux/X11-only window route described further down; the legacy terminal matrix does not qualify additional agents. Precision levels: **pane/tab** targets the exact split or tab; **window** raises an app window; **best-effort** may otherwise match by title (not permitted by the new guarded route).
 
 | App | <img src="assets/platforms/apple.svg" width="14" height="14" alt=""/> macOS | <img src="assets/platforms/linux.svg" width="14" height="14" alt=""/> Linux | <img src="assets/platforms/windows.svg" width="14" height="14" alt=""/> Windows | Notes |
 |---|---|---|---|---|
@@ -54,8 +54,40 @@ In the shared file selected by `config path`:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `clickToFocus` | `true` | Enable click-to-focus on supported macOS, Linux and Windows terminals |
+| `clickToFocus` | `true` (legacy defaults) | Legacy terminal focus on supported agents/platforms; **Qoder/Gemini/Cursor are off until explicit per-agent schema-2 consent** |
 | `terminalBundleId` | `""` | macOS only: override auto-detected terminal. Use bundle ID like `com.googlecode.iterm2` |
+
+### Guarded local CLI routing (Qoder, Gemini CLI, Cursor CLI)
+
+This guarded route is **separate from the legacy terminal-app matrix**. For Qoder CLI, Gemini CLI and Cursor CLI, an inherited or previously saved `clickToFocus: true` never enables navigation. The [agent support matrix](AGENT_SUPPORT_MATRIX.md#implemented-integrations-channels-and-navigation) records this as **guarded opt-in local Linux/X11 window focus**, not fully qualified per-CLI click support.
+
+The strict route is limited to a **verified local Linux/X11 window**. It requires the selected installed agent, a real terminal ancestor confirmed by the X11 XRes server (not a window title or `_NET_WM_PID`), the current installation generation, and the unchanged, explicit agent consent. The daemon authenticates its local sender and rechecks consent, window lifetime and installation when the notification is clicked. An unverified origin, SSH/remote/headless session, Wayland compositor, or macOS/Windows falls back to an ordinary informational notification rather than focusing the last-used window.
+
+**Strict-route host requirements:** a local X11 desktop and terminal-provided `WINDOWID`, `/usr/bin/python3`, `libX11.so.6`, `libXRes.so.1` (XRes 1.2), and `/usr/bin/xdotool`. These are **host dependencies of this route**, not additional requirements for ordinary notifications. Missing X11 ownership proof or a required tool leaves a safe, informational banner.
+
+Strict routing also requires the selected configuration path to stay unchanged after resolving parent links. A config reached through a symlinked parent, including a symlinked `HOME`, deliberately disables strict focus while leaving ordinary notifications working. For an opt-in profile that needs focus, set `AGENT_NOTIFICATIONS_CONFIG` to the **physical absolute path** of the existing configuration file rather than relaxing the selection check.
+
+For an eligible test profile, **back up the selected configuration** and explicitly enable the agent in an existing schema-2 document. This is an example of the relevant fields, not a replacement for other settings:
+
+```json
+{
+  "schemaVersion": 2,
+  "notifications": { "desktop": { "clickToFocus": true } },
+  "agents": {
+    "qoder": {
+      "notifications": {
+        "desktop": { "clickToFocus": true, "terminalClickConsentVersion": 1 }
+      }
+    }
+  }
+}
+```
+
+Use the same agent-local settings under `agents.gemini` or `agents.cursor` for those agents. The global `clickToFocus: false` remains an absolute veto. The existing `config edit` command does not edit `/agents/...` paths, so edit and inspect schema-2 agent profiles manually, preserving all other profiles. Do not enable navigation by copying an old saved `clickToFocus: true` alone.
+
+The CI workflow `strict-terminal-native-linux.yml` verifies the real X11 desktop, product daemon, dunst banner, synthetic X11 click through `xdotool` under Xvfb, and consent-revocation/spoofing negatives. Its sender is an isolated native Go fixture. The separate [Gemini desktop suite](gemini-notifications.md#automated-linux-desktop-e2e) uses the actual installed Gemini CLI and production hooks with a local model provider to exercise completion → banner → click → originating window. Authenticated CLI-to-click qualification remains open for Qoder, Gemini and Cursor; the local-provider Gemini test does not establish the other agents' event paths.
+
+Same-user compromised processes are outside the notifier's sandbox; this path prevents accidental/wrong-window activation, not arbitrary actions by a compromised user process.
 
 ## macOS
 
@@ -99,13 +131,18 @@ Uses a background D-Bus daemon. Auto-detects terminal and compositor.
 | JetBrains IDEs (IntelliJ IDEA, PhpStorm, WebStorm, PyCharm, GoLand, …) | GNOME, KDE, Sway, X11 — the IDE window, not the terminal tab |
 | Any other | Fallback by name |
 
-Focus methods (tried in order):
+Focus methods (tried in order, when the corresponding hints are present):
 
 1. **Warp**: `xdg-open` of `$WARP_FOCUS_URL` (`warp://session/<uuid>`) when the hook ran inside Warp
-2. **GNOME**: `activate-window-by-title` extension, Shell Eval, FocusApp (GNOME 45+)
-3. **Sway / wlroots**: `wlrctl`
-4. **KDE Plasma**: `kdotool`
-5. **X11** (XFCE, MATE, Cinnamon, i3, bspwm): `xdotool`
+2. **Exact X11 window ID**: `xdotool` or `wmctrl` when the hook captured an ID
+3. **Sway** (`swaymsg`): the window is picked by process ancestry. The hook records `$SWAYSOCK` and the process IDs of its ancestors, and a click raises the Sway window owned by the nearest ancestor. That is the exact window even with several windows of one terminal open, as long as each is its own process, which is the usual setup (one Alacritty process per window, for example). When one process owns several windows (a terminal server, an IDE with several projects), an exact window title captured by the hook is preferred; otherwise it matches the project folder, then falls back to the first window in Sway's layout tree.
+4. **Exact captured window title**: `wmctrl` or `xdotool` if Sway ancestry did not succeed
+5. **GNOME**: `activate-window-by-title` extension, Shell Eval, FocusApp (GNOME 45+)
+6. **wlroots fallback**: `wlrctl` for other wlroots compositors and Sway when no ancestor owns a window (such as a session inside tmux). It selects windows by `app_id`, so it cannot tell multiple windows of one terminal apart.
+7. **KDE Plasma**: `kdotool`
+8. **X11** (XFCE, MATE, Cinnamon, i3, bspwm): `xdotool`
+
+Each successful window-level step stops the chain. If Sway ancestry was tried but failed, the exact-title and compositor fallbacks remain available; `swaymsg` is not retried.
 
 Falls back to standard notifications if no focus tool is available.
 
@@ -118,7 +155,7 @@ Works in the built-in terminal of JetBrains IDEs. The plugin finds the IDE in th
 - KDE Plasma (`kdotool`) and X11 (`xdotool`) raise the window whose title starts with the project name. If none matches, they raise another window of the IDE.
 - Two open projects with the same name: in one IDE process, JetBrains adds each project's path to its title and the plugin picks the window with this session's path. In two processes of the same IDE the titles have no path, and the plugin picks the window of this session's IDE process.
 - With `notifyOnlyWhenUnfocused`, the notification is skipped while this project's IDE window is active (KDE Plasma: `kdotool`, X11: `xdotool`). It can't tell whether the IDE's terminal panel is open.
-- GNOME (`activate-window-by-title` extension) matches the project name anywhere in a window title. Sway (`wlrctl`) raises a window of the IDE, not always the project's.
+- GNOME (`activate-window-by-title` extension) matches the project name anywhere in a window title. Sway (`swaymsg`) first tries the exact hook-captured title among windows owned by this session's IDE process, then uses the same project-title rule as `kdotool` and `xdotool`, and raises another window of that process if neither matches. Other wlroots compositors (`wlrctl`) raise a window of the IDE, not always the project's.
 
 ### Diagnostics
 
@@ -219,7 +256,7 @@ If the Python API is not available, the plugin falls back to standard `tmux sele
 
 ## Windows
 
-Clicking a notification raises the terminal **window** that started the task. Enabled by the same `clickToFocus` flag; no extra configuration. In Warp, the toast also carries `WARP_FOCUS_URL`, and the click handler opens that session deep link first so the originating tab/pane is selected before the generic HWND fallback.
+For the **existing qualified Windows terminal routes**, clicking a notification raises the terminal **window** that started the task. This is **not** a Windows focus route for Qoder/Gemini/Cursor, which remain informational-only outside verified local Linux/X11. For the existing route, the `clickToFocus` setting applies; in Warp, the toast can carry `WARP_FOCUS_URL` to select the originating tab/pane before the generic HWND fallback.
 
 How it works (no admin rights, no COM server):
 

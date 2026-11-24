@@ -9,13 +9,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/777genius/agent-notifications/internal/notification"
 )
 
 // Common errors
 var (
 	ErrDaemonNotAvailable = errors.New("daemon not available")
 	ErrDaemonNotRunning   = errors.New("daemon not running")
+	// ErrNoFocusUnsupported means the running daemon predates NotifyRequest.NoFocus
+	// and would add a click action anyway. Nothing was sent.
+	ErrNoFocusUnsupported = errors.New("daemon does not support actionless notifications")
 )
+
+// CapabilityNoFocus is advertised in PingResponse.Capabilities by a daemon that
+// honours NotifyRequest.NoFocus and NotifyRequest.ReplaceKey. An older daemon
+// ignores both fields, so a NoFocus request is checked against it first.
+const CapabilityNoFocus = "no_focus"
 
 // Protocol version for compatibility checking
 const ProtocolVersion = "1.0"
@@ -25,8 +35,10 @@ type MessageType string
 
 const (
 	MessageTypeNotify MessageType = "notify"
-	MessageTypePing   MessageType = "ping"
-	MessageTypeStop   MessageType = "stop"
+	// Strict focus must not be understood as the legacy approximate route.
+	MessageTypeNotifyStrict MessageType = "notify_strict"
+	MessageTypePing         MessageType = "ping"
+	MessageTypeStop         MessageType = "stop"
 )
 
 // Request is the wrapper for all IPC requests
@@ -46,29 +58,41 @@ type Response struct {
 
 // NotifyRequest contains notification details sent to the daemon
 type NotifyRequest struct {
-	Title              string `json:"title"`
-	Body               string `json:"body"`
-	AppIcon            string `json:"app_icon,omitempty"`              // Icon path or name shown by the notification server
-	FocusTarget        string `json:"focus_target"`                    // Terminal identifier (empty = auto-detect)
-	FocusFolder        string `json:"focus_folder,omitempty"`          // Project folder name for window-specific focus
-	FocusProjectPath   string `json:"focus_project_path,omitempty"`    // JetBrains project root, to tell same-named projects apart
-	FocusIDEPID        int    `json:"focus_ide_pid,omitempty"`         // JetBrains IDE process, to tell its windows from another process's
-	FocusWindowID      string `json:"focus_window_id,omitempty"`       // Exact X11 window ID captured in the hook process
-	FocusWindowTitle   string `json:"focus_window_title,omitempty"`    // Exact window title captured in the hook process when available
-	FocusWezTermPaneID string `json:"focus_wezterm_pane_id,omitempty"` // WezTerm pane ID ($WEZTERM_PANE)
-	FocusWezTermSocket string `json:"focus_wezterm_socket,omitempty"`  // WezTerm unix socket ($WEZTERM_UNIX_SOCKET)
-	FocusZellijSession string `json:"focus_zellij_session,omitempty"`  // Zellij session name ($ZELLIJ_SESSION_NAME)
-	FocusZellijPaneID  string `json:"focus_zellij_pane_id,omitempty"`  // Zellij pane ID ($ZELLIJ_PANE_ID)
-	FocusZellijTabName string `json:"focus_zellij_tab_name,omitempty"` // Zellij tab name, captured only for the tab fallback
-	FocusZellijMode    string `json:"focus_zellij_mode,omitempty"`     // "pane", "tab" or "off", resolved in the hook process
-	FocusWarpURL       string `json:"focus_warp_url,omitempty"`        // Warp pane deep link ($WARP_FOCUS_URL)
-	Timeout            int    `json:"timeout"`                         // Notification timeout in seconds
+	Title              string                       `json:"title"`
+	Body               string                       `json:"body"`
+	AppIcon            string                       `json:"app_icon,omitempty"`              // Icon path or name shown by the notification server
+	FocusTarget        string                       `json:"focus_target"`                    // Terminal identifier (empty = auto-detect)
+	FocusFolder        string                       `json:"focus_folder,omitempty"`          // Project folder name for window-specific focus
+	FocusProjectPath   string                       `json:"focus_project_path,omitempty"`    // JetBrains project root, to tell same-named projects apart
+	FocusIDEPID        int                          `json:"focus_ide_pid,omitempty"`         // JetBrains IDE process, to tell its windows from another process's
+	FocusWindowID      string                       `json:"focus_window_id,omitempty"`       // Exact X11 window ID captured in the hook process
+	FocusWindowTitle   string                       `json:"focus_window_title,omitempty"`    // Exact window title captured in the hook process when available
+	FocusWezTermPaneID string                       `json:"focus_wezterm_pane_id,omitempty"` // WezTerm pane ID ($WEZTERM_PANE)
+	FocusWezTermSocket string                       `json:"focus_wezterm_socket,omitempty"`  // WezTerm unix socket ($WEZTERM_UNIX_SOCKET)
+	FocusZellijSession string                       `json:"focus_zellij_session,omitempty"`  // Zellij session name ($ZELLIJ_SESSION_NAME)
+	FocusZellijPaneID  string                       `json:"focus_zellij_pane_id,omitempty"`  // Zellij pane ID ($ZELLIJ_PANE_ID)
+	FocusZellijTabName string                       `json:"focus_zellij_tab_name,omitempty"` // Zellij tab name, captured only for the tab fallback
+	FocusZellijMode    string                       `json:"focus_zellij_mode,omitempty"`     // "pane", "tab" or "off", resolved in the hook process
+	FocusWarpURL       string                       `json:"focus_warp_url,omitempty"`        // Warp pane deep link ($WARP_FOCUS_URL)
+	FocusSwaySocket    string                       `json:"focus_sway_socket,omitempty"`     // Sway IPC socket ($SWAYSOCK)
+	FocusAncestorPIDs  []int                        `json:"focus_ancestor_pids,omitempty"`   // Hook process ancestry, nearest first, to find the terminal's Sway window
+	Timeout            int                          `json:"timeout"`                         // Notification timeout in seconds
+	Strict             *notification.TerminalTarget `json:"strict,omitempty"`
+	StrictSound        bool                         `json:"strict_sound,omitempty"`
+	// ReplaceKey is the session id of a notification that replaces the same
+	// session's previous one (replaceNotificationsPerSession). Empty keeps the
+	// notification unique. Ignored for strict requests.
+	ReplaceKey string `json:"replace_key,omitempty"`
+	// NoFocus sends the notification without a click action or focus context,
+	// for requests routed through the daemon only to be replaceable.
+	NoFocus bool `json:"no_focus,omitempty"`
 }
 
 // NotifyResponse contains the result of a notification request
 type NotifyResponse struct {
 	Success        bool   `json:"success"`
 	NotificationID uint32 `json:"notification_id"`
+	FocusEnabled   bool   `json:"focus_enabled,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
 
@@ -76,6 +100,8 @@ type NotifyResponse struct {
 type PingResponse struct {
 	Version string `json:"version"`
 	Uptime  int64  `json:"uptime"` // Seconds since daemon started
+	// Capabilities lists optional request fields this daemon honours.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // GetSocketPath returns the Unix socket path for the daemon.

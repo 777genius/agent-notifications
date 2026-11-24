@@ -47,7 +47,9 @@ func TestInstallerResultPrivateFiniteProtocol(t *testing.T) {
 		t.Fatalf("recovery missing or unsafe: %q", out.String())
 	}
 	out.Reset()
-	writeSetupWizardSummary(&out, result)
+	if err := writeSetupWizardSummary(&out, result); err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{"Claude plugin verification timed out", "registration saved; activation timed out", "registration saved; activation not started", "Resume saved activation"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q: %s", want, out.String())

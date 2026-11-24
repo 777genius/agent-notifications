@@ -864,6 +864,7 @@ def run(args):
     evidence["update_candidate_sha256"] = update_hash
     stop, spool = threading.Event(), {"receipts": [], "error": None}
     watcher, terminal, env, damaged_preimage = None, None, None, None
+    diagnostic_receiver = None
     capture_collection_known = True
     owned_input_capture = None
     owned_input_deadline = None
@@ -947,10 +948,21 @@ def run(args):
             # Conservative lower bound on the first bridge's existing watchdog:
             # its actual timer starts later, after Terminal starts the child.
             owned_input_deadline = time.monotonic() + args.timeout
+            if sys.platform in ("linux", "darwin"):
+                diagnostic_receiver = g0.EventDiagnosticReceiver(lab)
             terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout, args.gemini_version)
+            terminal.diagnostic_capture = diagnostic_receiver
             initial_join_active = True
             cases, rows = g0.exercise(lab, fixture, terminal, ui, observer=lambda p: native_rows(g0, p))
+            initial_settle_end = min(owned_input_deadline, terminal.case_deadline, time.monotonic() + 6)
             before_remove_counts = settle(g0, lab, fixture, terminal, delivery_counts(rows), cache_baseline=cache_baseline)
+            if diagnostic_receiver is not None:
+                diagnostic_receiver.wait_count(7, initial_settle_end)  # Never restart the existing settle budget.
+                hints = g0.await_initial_event_diagnostics(lab, diagnostic_receiver, initial_settle_end)
+                evidence["event_diagnostic_capture"] = {"class": "verified_initial_owned_hook_hints" if hints["diagnostic_complete"] else "unavailable", "owned_calls": 7}
+                require(hints["diagnostic_complete"], "TEST_event_diagnostic_capture_unproved")
+            else:
+                evidence["event_diagnostic_capture"] = {"class": "unsupported_platform"}
             seal_initial_join()
             initial_join_active = False
             require(snapshot(lab, active_hash)[0] == first, "live_session_installation_mutation")
@@ -1014,6 +1026,7 @@ def run(args):
             previous = native_rows(g0, lab)
             capture_collection_known = False
             terminal = g0.Terminal(node, executable, install, lab, env, ui, args.timeout, args.gemini_version)
+            terminal.diagnostic_capture = diagnostic_receiver
             end = time.monotonic() + 25
             while time.monotonic() < end:
                 terminal.drain()
@@ -1067,6 +1080,11 @@ def run(args):
         evidence["driver"] = "passed_implemented_scenarios_with_external_gates_pending"
         levels[platform]["native_cli/provider_substitute"] = "passed_implemented_scenarios"
     except Exception as exc:
+        if diagnostic_receiver is not None and not diagnostic_receiver.closed:
+            try:
+                diagnostic_receiver.stop()
+            except Exception:
+                evidence["event_diagnostic_capture"] = {"class": "unavailable"}
         if initial_join_active:
             try:
                 seal_initial_join()
@@ -1089,6 +1107,11 @@ def run(args):
                 ("streamGenerateContent", "generateContent", "countTokens")}
         raise
     finally:
+        if diagnostic_receiver is not None and not diagnostic_receiver.closed:
+            try:
+                diagnostic_receiver.stop()
+            except Exception:
+                evidence["event_diagnostic_capture"] = {"class": "unavailable"}
         if terminal is not None:
             try:
                 terminal.close(graceful=False)

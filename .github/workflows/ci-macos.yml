@@ -24,11 +24,14 @@ jobs:
   scope:
     if: ${{ !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) }}
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && 'Metadata edit ignored (scope)' || 'Classify macOS CI scope' }}
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    # Read-only, fail-open classifier: free the shared Linux native CI pool.
+    # Fork PRs already used this hosted runner; E2E remains on original VMs.
+    runs-on: ubuntu-latest
     timeout-minutes: 50
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     outputs:
       mode: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && github.event.changes.base != null && 'full' || steps.release-scope.outputs.mode || steps.classify.outputs.mode }}
     steps:
@@ -104,7 +107,10 @@ jobs:
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && !(github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null)) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'windows-only' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent') }}
     name: ${{ github.event.action == 'edited' && github.event.changes.base == null && (github.event.changes.title != null || github.event.changes.body != null) && format('Metadata edit ignored (macOS {0})', matrix.go) || format('Test on macOS ({0})', matrix.go) }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && inputs.use_github_runner && matrix.os || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && matrix.os || matrix.os == 'macos-15' && (vars.CI_MACOS_15_RUNNER || 'macos-15') || matrix.os == 'macos-26' && (vars.CI_MACOS_26_RUNNER || 'macos-26') || matrix.os }}
-    timeout-minutes: 30
+    # Both Go versions run the full offline installer suite; the 30-minute
+    # Go 1.25 job budget cancelled active tests on a hosted macOS runner.
+    # Keep individual test deadlines and reserve time for post-action cleanup.
+    timeout-minutes: 40
 
     strategy:
       fail-fast: false
@@ -265,6 +271,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:

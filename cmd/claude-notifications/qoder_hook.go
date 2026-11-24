@@ -99,5 +99,6 @@ func runManagedQoderHook(args []string) {
 		return
 	}
 	handler.RestrictChannels(desktop, webhook)
+	handler.BindManagedTerminalClick(ctx, control, current.Installation.Ledger.ID, current.Installation.Ledger.Generation)
 	_ = handler.HandleHook(args[0], bytes.NewReader(raw))
 }

@@ -111,7 +111,7 @@ func TestWizardInstallOrUpdateRetainsRegistryMigration(t *testing.T) {
 					}
 				}
 			}
-			result, err := runInstallOrUpdate(ctx, req, tc.preserve)
+			result, err := setupwizard.InstallOrUpdate(ctx, req, tc.preserve)
 			if tc.lateRegistryChange {
 				if err == nil || result.Reason != "state_migration_changed" || result.Outcome != "conflict" || len(result.Command) != 0 || len(result.NextActions) != 0 {
 					t.Fatalf("second unapproved migration was admitted: %+v %v", result, err)
@@ -159,12 +159,14 @@ func TestWizardInstallOrUpdateRegistryPreflight(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := runInstallOrUpdate(ctx, req, false)
+			result, err := setupwizard.InstallOrUpdate(ctx, req, false)
 			if err == nil || result.Action != "install" || result.Reason != tc.reason || len(result.Command) != 0 || len(result.NextActions) != 0 {
 				t.Fatalf("unsafe auto preflight: %+v %v", result, err)
 			}
 			var output bytes.Buffer
-			writeSetupWizardSummary(&output, result)
+			if err := writeSetupWizardSummary(&output, result); err != nil {
+				t.Fatal(err)
+			}
 			if !strings.Contains(output.String(), tc.advice) || strings.Contains(output.String(), "PRIVATE_CONFIG_CANARY") || strings.Contains(output.String(), "Resume saved activation") {
 				t.Fatalf("unsafe migration advice: %s", output.String())
 			}
@@ -214,7 +216,7 @@ func TestWizardInstallOrUpdateRejectsChangedMigrationApproval(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := runInstallOrUpdate(ctx, req, false)
+			result, err := setupwizard.InstallOrUpdate(ctx, req, false)
 			if err == nil || result.Reason != "state_migration_changed" || result.Outcome != "conflict" || len(result.Command) != 0 || len(result.NextActions) != 0 {
 				t.Fatalf("auto mode replaced approved snapshot: %+v %v", result, err)
 			}

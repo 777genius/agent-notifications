@@ -2,7 +2,7 @@
 
 The Qoder adapter hooks the same attention events as the Claude adapter:
 completion, questions, permission prompts, plan readiness, subagent
-completion, idle teammates and unexpected stop failures.
+completion and unexpected stop failures.
 Events arrive as native Qoder hook payloads;
 the dedicated native bundle registers one handler per event plus a platform
 executable. The common installer builds this bundle from the verified release
@@ -31,13 +31,15 @@ Older custom Qoder installations are not adopted or migrated by this flow.
 | `PermissionRequest` | permission request | on |
 | `PreToolUse` (matcher `ExitPlanMode\|AskUserQuestion`) | plan ready / question | on |
 | `SubagentStop` | subagent task complete | off (opt-in) |
-| `TeammateIdle` | idle teammate | on; records idle state, team-completion alert requires a stopped lead |
+| `TeammateIdle` | registered observation; no team-completion alert | silent; no verified Qoder-owned team-state source |
 
 `Stop` rides the Go SDK's Qoder transport. The other six events are decoded directly
 as strict hook JSON: the event name inside the payload must match the handler,
 oversized payloads are rejected, and no transcript path is assumed —
-everything is derived from the event payload itself. Continuation turns never
-notify. The Qoder wire carries no turn or subagent identity, so identical
+everything is derived from the event payload itself. The documented
+[`stop_hook_active` continuation flag](https://docs.qoder.com/cli/hooks) suppresses
+both `Stop` and `SubagentStop` notifications. The current mapping does not use
+turn or subagent identity, so identical
 re-prompts or identical subagent completions within the dedup window collapse
 to a single notification. `PermissionRequest` notifications name the tool and are labeled
 `Qoder requests permission`. A native `StopFailure` is **not** a successful completion:
@@ -88,9 +90,7 @@ file path when using a separate TEST profile. Qoder inherits global
 notification settings; an optional schema version 2 `agents.qoder` profile
 provides overrides. Merge this into the existing document rather than replacing
 other agents' settings. Omitted fields continue to inherit global settings;
-this example deliberately disables sound for Qoder. `clickToFocus` is shown for
-schema completeness only: click-to-focus capture is currently Claude-only and
-the knob is inert for Qoder.
+this example deliberately disables sound **and guarded focus** for Qoder. For verified **local Linux/X11** terminal windows, managed Qoder hooks can opt in with `agents.qoder.notifications.desktop.clickToFocus: true` and `terminalClickConsentVersion: 1` in the selected schema-2 config. An inherited/global `clickToFocus: true` alone is insufficient; a global `false` vetoes focus. Non-local/unverified sessions keep informational banners. This raises the originating terminal **window**, not an exact Qoder Desktop chat. [Consent and proof requirements](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
 
 ```json
 {
@@ -116,8 +116,10 @@ Per-event opt-in notes:
   suppresses it by default, and even with suppression lifted the explicit
   `notifications.notifyOnSubagentStop` flag must be true before a subagent
   completion notifies.
-- `TeammateIdle` needs a team identity in the payload (team name and teammate
-  name); without one the handler stays silent.
+- `TeammateIdle` remains registered and its payload is decoded, but it stays
+  silent. The adapter has no verified Qoder-owned team-state source or lead-stop
+  lifecycle. Team and teammate names alone do not authorize reading or claiming
+  Claude team state; Qoder observations never change that state.
 
 The hooks run synchronously so Qoder waits for delivery before continuing.
 Handlers remain observation-only and do not block task completion with a
@@ -138,7 +140,7 @@ Use that executable for lifecycle commands (retain `--config-root` and
 ```
 
 Reload Qoder after installation, update or removal so existing sessions pick up
-the changed hooks. Click-to-focus to the exact existing Qoder chat is unavailable.
+the changed hooks. Guarded terminal-window focus is Linux/X11-only and optional; opening the exact existing Qoder Desktop chat remains unavailable. The shared strict X11 click test uses an isolated Go sender, not a real authenticated Qoder turn, so per-CLI click E2E is still unqualified.
 
 ## Build a standalone native package
 

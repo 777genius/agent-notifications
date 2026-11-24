@@ -1,9 +1,9 @@
 # Basic release seal and resume
 
 The manual `basic-release.yml` operator accepts stable `vMAJOR.MINOR.PATCH` tags.
-Before dispatch, prepare all five source versions and the changelog, explicitly
-exclude that tag from `release.yml` in both candidate C and operator main O, and
-complete independent review plus current-C source CI. The existing signing and
+Before dispatch, prepare all five source versions and the changelog and
+complete independent review plus current-C source CI. The retired tag-triggered
+workflow is absent from both candidate C and operator main O. The existing signing and
 five-platform artifact checks remain mandatory. This helper does not authorize
 publication, Latest, macOS/Codex E2E, installed business or full native claims.
 

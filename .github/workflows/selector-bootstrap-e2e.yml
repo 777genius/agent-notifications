@@ -15,6 +15,7 @@ on:
       - 'cmd/claude-notifications/setup_products*'
       - 'internal/agentnotify/setupwizard/**'
       - 'internal/opencodeinstall/**'
+      - 'internal/desktopinstall/**'
       - 'scripts/selector*'
       - 'bin/bootstrap.sh'
       - 'bin/setup.sh'

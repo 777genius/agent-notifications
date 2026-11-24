@@ -56,21 +56,34 @@ type contextualSnapshotPort interface {
 	SampleSnapshotContext(context.Context) (ClockSnapshot, error)
 }
 
+// Snapshot takes one independently validated sample. A sample whose own read bracket is
+// too wide (a loaded machine can stretch one read past the qualified bound) is simply
+// discarded and measured again, at most clockSampleAttempts times inside the caller's
+// budget. Every accepted sample still passed the full bound check by itself.
+const clockSampleAttempts = 3
+
 func (c TrustedClock) Snapshot(ctx context.Context) (ClockSample, error) {
 	if ctx.Err() != nil || c.Source == nil || !c.Selection.valid() {
 		return ClockSample{}, ErrClockUnavailable
 	}
-	var s ClockSnapshot
-	var err error
-	if port, ok := c.Source.(contextualSnapshotPort); ok {
-		s, err = port.SampleSnapshotContext(ctx)
-	} else {
-		s, err = c.Source.SampleSnapshot()
+	for attempt := 0; attempt < clockSampleAttempts; attempt++ {
+		var s ClockSnapshot
+		var err error
+		if port, ok := c.Source.(contextualSnapshotPort); ok {
+			s, err = port.SampleSnapshotContext(ctx)
+		} else {
+			s, err = c.Source.SampleSnapshot()
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		if err == nil {
+			if sample, mapErr := c.Selection.mapSnapshot(s); mapErr == nil {
+				return sample, nil
+			}
+		}
 	}
-	if err != nil || ctx.Err() != nil {
-		return ClockSample{}, ErrClockUnavailable
-	}
-	return c.Selection.mapSnapshot(s)
+	return ClockSample{}, ErrClockUnavailable
 }
 
 func (c ClockSelection) mapSnapshot(s ClockSnapshot) (ClockSample, error) {
