@@ -3,6 +3,7 @@
 package portablesetup
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
@@ -246,7 +248,14 @@ func TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude(t *testing.T
 			}
 		})
 	}
-	updated, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{codexReq, local})
+	// This positive two-client update exercises real SDK projection, ownership
+	// verification and durable host finalization under the race detector. On a
+	// loaded macOS runner the existing 30s fixture budget expired mid-activation.
+	// Keep the longer deadline local to this operation; the refusal cases and
+	// production deadlines remain unchanged.
+	updateCtx, cancelUpdate := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelUpdate()
+	updated, err := mat.ApplyGroup(updateCtx, []MaterializeRequest{codexReq, local})
 	if err != nil {
 		// Bounded failure-only evidence identifies which saved SDK proof is
 		// absent without weakening native activation or the acceptance gate.
