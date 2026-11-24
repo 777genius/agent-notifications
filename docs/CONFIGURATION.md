@@ -228,6 +228,7 @@ The following JSON illustrates the schema. Do not replace your existing document
     "notifyOnSubagentStop": false,
     "suppressForSubagents": true,
     "notifyOnTextResponse": true,
+    "notifyOnAgentInitiatedTurns": true,
     "respectJudgeMode": true,
     "notifyOnlyWhenUnfocused": false,
     "notifyDelaySeconds": 0,
@@ -298,6 +299,7 @@ hides native and generated names without hiding the question or project.
 | `notifyOnSubagentStop` | `false` | Send notifications when subagents (Task tool) complete. Has no effect unless `suppressForSubagents` is also set to `false`. |
 | `suppressForSubagents` | `true` | Suppress subagent (`SubagentStop`) notifications, plus any `Stop` notification whose transcript is a subagent/teammate transcript. Detection uses the hook event for `SubagentStop` (Claude passes the parent session `transcript_path` to that hook, so a path check alone can't identify it). Set to `false` together with `notifyOnSubagentStop: true` to get a notification each time a subagent finishes. |
 | `notifyOnTextResponse` | `true` | Send notifications for text-only responses (no tool usage) |
+| `notifyOnAgentInitiatedTurns` | `true` | Claude Code only. Send "Completed" and "Review" notifications for turns you did not start by typing, for example a turn started by a subagent result, a teammate message or a cross-session message. Set to `false` to get those notifications only for turns that began with your own input. See [Turns you did not start](#turns-you-did-not-start). |
 | `desktop.showSessionLabel` | `true` | Show the native session name, with `[name id]` as fallback. Questions identify the session in the native macOS subtitle or the body on backends without subtitles. `false` hides both kinds of session label without hiding the actual question. |
 | `respectJudgeMode` | `true` | Honor `CLAUDE_HOOK_JUDGE_MODE=true` env var to suppress notifications |
 | `notifyOnlyWhenUnfocused` | `false` | Skip the desktop notification only when the focused terminal window can be matched to the current Claude session. Best-effort per platform; if focus can't be determined the notification is still shown. |
@@ -329,6 +331,32 @@ You can also override individual channels per status:
 `statuses.<name>.enabled` is still the master switch for both channels. Use
 `desktop.enabled` and `webhook.enabled` when you want one channel on and the
 other off for the same status.
+
+### Turns you did not start
+
+In Claude Code, a turn can also start without your input: a background subagent
+finishes and reports its result, a teammate sends a message, or another Claude
+session messages this one. Each of those turns ends with a "Completed"
+notification, even though you did not ask for anything. With
+`"notifyOnAgentInitiatedTurns": false` the plugin sends "Completed" and "Review"
+only for turns that began with your own input.
+
+Claude Code marks each prompt in the transcript with who sent it. The plugin
+looks at the input that started the current turn and treats the turn as yours
+when that input was typed by you. Input that Claude Code adds to a turn while it
+is still running doesn't change who started it. That covers skill instructions,
+compaction summaries and queued notifications. A turn you started still notifies
+when Claude used a skill or the conversation was compacted along the way.
+
+Some notifications are always sent, whoever started the turn: questions,
+plans, permission requests, API errors and session limits. These need your
+attention. In `teamMode: "wait-all"`, the "all teammates finished" notification
+also still goes out, even though the lead's last turn usually starts with a
+teammate message.
+
+Transcripts from Claude Code versions that don't record who sent a prompt keep
+the current behavior, so every turn notifies. This option doesn't affect other
+agents.
 
 ### Focus-Aware & Delayed Notifications
 

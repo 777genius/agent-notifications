@@ -345,6 +345,21 @@ func sameWizardBootstrapScope(actual, expected setupwizard.Request) bool {
 const cursorP1Qualification = "uap406:run37381034498:job112002773007:public098:commit0983418ab0c2724b5cf648512e0a26baafaad546:sha256:7d305d6cabe775e12083c5c4f49fe9246eb1cb8244d596d03c50aa1e7de670b5"
 const selectedCursorVersion = "2026.09.28-64d2043"
 
+// Each exact source kernel has its own evidence identity. Unknown kernels must
+// not inherit the historical Azure receipt, even before namespace admission.
+func cursorLinuxSourceQualification(kernel string) string {
+	switch kernel {
+	case "6.17.0-1022-azure":
+		return cursorP1Qualification
+	case "7.0.0-1017-azure":
+		return "cursor-linux-amd64-ubuntu24.04.5-kernel7.0.0-1017-azure-ext4:source-ci-pr497"
+	case "7.0.0-1014-aws":
+		return "cursor-linux-amd64-ubuntu24.04.5-kernel7.0.0-1014-aws-ext4:source-ci-aws-20261123"
+	default:
+		return ""
+	}
+}
+
 // Mac evidence qualifies only the fixed native shell tuple; installed receipt,
 // physical profile authority and explicit consent remain mandatory.
 func cursorHostQualification() string {
@@ -357,12 +372,9 @@ func cursorHostQualification() string {
 	version, _ := cursorinstall.CurrentTuple()
 	if version == selectedCursorVersion {
 		kernel, err := os.ReadFile("/proc/sys/kernel/osrelease")
-		if err == nil && strings.TrimSpace(string(kernel)) == "7.0.0-1017-azure" {
-			// Supplemental source qualification; the historical P1 receipt above
-			// does not qualify this kernel. See docs/CI_RUNNERS.md.
-			return "cursor-linux-amd64-ubuntu24.04.5-kernel7.0.0-1017-azure-ext4:source-ci-pr497"
+		if err == nil {
+			return cursorLinuxSourceQualification(strings.TrimSpace(string(kernel)))
 		}
-		return cursorP1Qualification
 	}
 	return ""
 }
