@@ -53,6 +53,16 @@ func (c *Config) ShouldNotifyOnTextResponse() bool {
 	return *c.Notifications.NotifyOnTextResponse
 }
 
+// ShouldNotifyOnAgentInitiatedTurns returns true if Claude Code completion
+// notifications should be sent for turns that typed user input did not start
+// (default: true)
+func (c *Config) ShouldNotifyOnAgentInitiatedTurns() bool {
+	if c.Notifications.NotifyOnAgentInitiatedTurns == nil {
+		return true // Default: notify for every turn
+	}
+	return *c.Notifications.NotifyOnAgentInitiatedTurns
+}
+
 // ShouldSuppressForSubagents returns true if notifications should be suppressed
 // when transcript_path contains /subagents/ (default: true)
 func (c *Config) ShouldSuppressForSubagents() bool {

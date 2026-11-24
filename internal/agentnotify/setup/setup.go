@@ -416,5 +416,14 @@ func Inspect(ctx context.Context, o Options, r Request, preparedGlobal []byte) e
 	if err != nil {
 		return err
 	}
-	return o.validatePrepared(ctx, candidate, preparedGlobal)
+	if err := o.validatePrepared(ctx, candidate, preparedGlobal); err != nil {
+		return err
+	}
+	// Validation alone cannot declare an already enabled installation ready:
+	// its journal or durable setupState may have been lost after a previous
+	// partial update. Match Apply's read-only admission before any mutation.
+	if candidate.Policy.Enabled {
+		return inspectInitializedForEnable(ctx, o, s)
+	}
+	return nil
 }

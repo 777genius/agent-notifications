@@ -26,6 +26,39 @@ generic "unavailable". Reinstalling is unnecessary when the current status call
 succeeds. Remote or isolated worker sessions must expose their own MCP tools;
 installation in the operator's profile does not establish access inside a worker.
 
+## `/init` fails with `initialization_recovery_required`
+
+This is **not** the Claude plugin-cache relocation error (`installed_bundle_required`).
+The explicit agent-notify policy and its durable `setupState` marker must agree
+with the private journal/spool. A newer binary or a healthy MCP registration
+alone does not prove that state can be safely initialized. A current
+`configure` preflight checks this invariant before any registration or enable
+writes; a failure at this boundary leaves the existing state untouched.
+
+Read-only diagnostics, using the installed verified binary in the selected
+profile:
+
+```sh
+agent-notifications setup-notifications status --json
+agent-notifications setup-notifications wizard --action inspect --agents claude --json
+```
+
+Record the status reason, generation and target outcomes, but **do not post**
+full `ownership.json`, private setup state/journal, paths or credentials.
+If the reason indicates an enabled policy without durable setup ownership,
+or a missing/damaged retained journal, automatic initialization is deliberately
+refused: recreating it could erase replay/dedup history. Do not delete
+`~/.config/agent-notifications`, its `ownership.json`, or
+`control/state` to force a fresh installation. Preserve the failing state
+for verified, explicit recovery. An incomplete `/init` may also leave the
+portable skill absent because it stops before the UAP wizard; this does not
+prove that an existing MCP binding was intentionally disabled.
+
+Old versioned cache file entries may remain owned while another
+`Consumers[*].RuntimeRoot` still references that old root; the final
+consumer's verified relocation retires its file ownership without deleting
+bytes needed by in-flight hooks. Never remove entries by editing the ledger.
+
 ## Linux MCP alerts work, but Claude setup still reports incomplete
 
 A working `notify` call and an incomplete UAP activation are **different facts**.
