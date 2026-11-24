@@ -89,9 +89,68 @@ run_installer() {
         "$@" /bin/bash "$script" --products pi --desktop --plain </dev/null > "$log" 2>&1
 }
 
+# Observe only the real public loader's last curl response, without changing
+# its bytes, arguments, clean HOME/PATH, unauthenticated requests or exit status.
+# Raw headers stay in the disposable profile (never in uploaded evidence).
+sanitize_public_provenance_headers() {
+    awk '
+        { sub(/\r$/, "") }
+        /^HTTP\/[0-9.]+ [0-9][0-9][0-9]([[:space:]]|$)/ {
+            status = $2
+            for (k in values) delete values[k]
+            next
+        }
+        {
+            colon = index($0, ":")
+            if (!colon) next
+            key = tolower(substr($0, 1, colon - 1))
+            value = substr($0, colon + 1)
+            sub(/^[[:blank:]]+/, "", value)
+            sub(/[[:blank:]]+$/, "", value)
+            if (key == "x-github-request-id" && value ~ /^[0-9A-Fa-f:]+$/ && length(value) <= 128)
+                values[key] = value
+            else if ((key == "x-ratelimit-remaining" || key == "x-ratelimit-reset" || key == "retry-after") && value ~ /^[0-9]+$/ && length(value) <= 20)
+                values[key] = value
+        }
+        END {
+            if (status != "") print "http_status=" status
+            split("x-ratelimit-remaining x-ratelimit-reset retry-after x-github-request-id", keys, " ")
+            for (i = 1; i <= 4; i++) if (keys[i] in values) print keys[i] "=" values[keys[i]]
+        }'
+}
+# Regression: keep only the final response and strictly allowlisted values.
+header_fixture=$(printf 'HTTP/1.1 302 Found\r\nX-RateLimit-Remaining: 9\r\n\r\nHTTP/2 403\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 1234567890\r\nRetry-After: unexpected\r\nX-GitHub-Request-Id: ABCD:1234\r\nSet-Cookie: private\r\n\r\n' | sanitize_public_provenance_headers)
+[ "$header_fixture" = $'http_status=403\nx-ratelimit-remaining=0\nx-ratelimit-reset=1234567890\nx-github-request-id=ABCD:1234' ]
+
+run_public_installer() {
+    local profile=$1 selected_path=$2 log=$3 status=0
+    local curl_home="$1/curl-diagnostics" headers="$1/curl-diagnostics/last-headers" output
+    mkdir -p -m 700 "$curl_home" || return 1
+    # The only curl config option is response-header capture. No auth or retry.
+    printf 'dump-header = "%s"\n' "$headers" > "$curl_home/.curlrc" || return 1
+    run_installer "$profile" "$selected_path" "$evidence/public-install.sh" "$log" \
+        "CURL_HOME=$curl_home" || status=$?
+    if [ "$status" -ne 0 ] && awk '
+        /Verifying release provenance\.\.\./ { pending=1; next }
+        pending && /curl: \([0-9]+\) The requested URL returned error: 403/ { found=1 }
+        { pending=0 }
+        END { exit !found }
+    ' "$log"; then
+        output="$evidence/$(basename "$log").provenance-headers.txt"
+        if [ -f "$headers" ]; then
+            sanitize_public_provenance_headers < "$headers" > "$output" || true
+        else
+            printf 'http_status=unavailable\n' > "$output"
+        fi
+        cat "$output" >&2 || true
+    fi
+    rm -f -- "$headers" "$curl_home/.curlrc" || true
+    return "$status"
+}
+
 # The exact reported discovery failure remains independently reproducible.
 missing_status=0
-run_installer "$root/missing" /usr/bin:/bin:/usr/sbin:/sbin "$evidence/public-install.sh" \
+run_public_installer "$root/missing" /usr/bin:/bin:/usr/sbin:/sbin \
     "$evidence/public-missing-path.log" || missing_status=$?
 [ "$missing_status" -ne 0 ]
 installer_said "$root/missing" "$evidence/public-missing-path.log" 'setup-products: pi prerequisite unavailable: not found in selected PATH'
@@ -100,8 +159,8 @@ printf '%s\n' "$missing_status" > "$evidence/public-missing-path.exit"
 # Retain the original released installation regression separately from candidate
 # success. A future corrected stable release may complete this same baseline.
 public_status=0
-run_installer "$root/public" "$(dirname "$pi"):/usr/bin:/bin:/usr/sbin:/sbin" \
-    "$evidence/public-install.sh" "$evidence/public-real-pi.log" || public_status=$?
+run_public_installer "$root/public" "$(dirname "$pi"):/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$evidence/public-real-pi.log" || public_status=$?
 printf '%s\n' "$public_status" > "$evidence/public-real-pi.exit"
 if [ "$public_status" -eq 0 ]; then
     public_outcome=completed
