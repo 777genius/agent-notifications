@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -167,6 +168,62 @@ func TestRequest_JSONRoundtrip_Notify(t *testing.T) {
 	}
 	if decoded.Notify.Timeout != 30 {
 		t.Errorf("Timeout = %d, want %d", decoded.Notify.Timeout, 30)
+	}
+}
+
+func TestNotifyRequest_JSONRoundtrip_SwayHints(t *testing.T) {
+	req := NotifyRequest{
+		Title:             "Test Title",
+		FocusSwaySocket:   "/run/user/1000/sway-ipc.1000.4242.sock",
+		FocusAncestorPIDs: []int{4242, 4200, 4100},
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	// The names are the wire contract with a daemon from another release.
+	for _, field := range []string{
+		`"focus_sway_socket":"/run/user/1000/sway-ipc.1000.4242.sock"`,
+		`"focus_ancestor_pids":[4242,4200,4100]`,
+	} {
+		if !strings.Contains(string(data), field) {
+			t.Errorf("JSON should contain %s: %s", field, data)
+		}
+	}
+
+	var decoded NotifyRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if decoded.FocusSwaySocket != req.FocusSwaySocket {
+		t.Errorf("FocusSwaySocket = %q, want %q", decoded.FocusSwaySocket, req.FocusSwaySocket)
+	}
+	if !reflect.DeepEqual(decoded.FocusAncestorPIDs, req.FocusAncestorPIDs) {
+		t.Errorf("FocusAncestorPIDs = %v, want %v", decoded.FocusAncestorPIDs, req.FocusAncestorPIDs)
+	}
+}
+
+// A hook outside Sway adds nothing to the message, which keeps it readable by an
+// older daemon, and a message from an older hook decodes to empty hints.
+func TestNotifyRequest_SwayHintsAreOptional(t *testing.T) {
+	data, err := json.Marshal(NotifyRequest{Title: "Test Title", FocusTarget: "alacritty"})
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	for _, field := range []string{"focus_sway_socket", "focus_ancestor_pids"} {
+		if strings.Contains(string(data), field) {
+			t.Errorf("JSON should not contain %q when empty: %s", field, data)
+		}
+	}
+
+	var decoded NotifyRequest
+	older := `{"title":"Test Title","body":"","focus_target":"alacritty","focus_folder":"proj","timeout":30}`
+	if err := json.Unmarshal([]byte(older), &decoded); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if decoded.FocusSwaySocket != "" || len(decoded.FocusAncestorPIDs) != 0 {
+		t.Errorf("an older hook's message decoded to Sway hints (%q, %v), want none", decoded.FocusSwaySocket, decoded.FocusAncestorPIDs)
 	}
 }
 

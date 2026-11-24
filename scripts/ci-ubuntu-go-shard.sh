@@ -9,6 +9,13 @@ fi
 shard=$1
 case "$shard" in cmd-setup|cmd-other|packages|cursorevent) ;; *) echo "unknown Go shard: $shard" >&2; exit 2 ;; esac
 
+# CLI E2E builds run with disposable HOME. Keep the module cache populated by
+# the preceding CI `go mod download` available without inheriting host config.
+# Otherwise nested `go build` re-downloads the entire graph from proxy.golang.org.
+if [[ -z "${GOMODCACHE:-}" ]]; then
+  export GOMODCACHE="$(go env GOMODCACHE)"
+fi
+
 package_list=$(go list ./...)
 selected=()
 while IFS= read -r package; do

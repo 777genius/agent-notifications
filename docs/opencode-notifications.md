@@ -87,6 +87,70 @@ prerequisites report unqualified and stop business phases. Historical observatio
 below retain their original source and scope; they do not qualify a newer binary
 or V2 by themselves.
 
+## Compatibility and diagnostics
+
+OpenCode provides two distinct plugin APIs: V1 calls the installed `server`
+hook; V2 calls `setup` and subscribes to native events. Installing the plugin
+does not itself prove that the **native notification observer** is qualified.
+The UAP family classifier already accepts compatible V1/V2 releases broadly;
+the more restrictive notification guard must also authenticate the live
+OpenCode process, independent native event source and clock. A release inside
+the supported range is admitted as described below; anything else may load the
+plugin while its notification observer stays unqualified, and a successful
+installation or version parse alone is not evidence of desktop/webhook delivery.
+
+The runtime profile now supplies the version independently observed from its
+held native host. V2 requires the version reported by `context.app` to match
+that independent observation, rather than compare with a hardcoded patch
+version. This removes the JS-only patch allowlist, **not** the native
+qualification requirements. Official releases are admitted by release range
+rather than by per-release hash: V1 `1.18.33` and newer within major 1, and V2
+`2.0.21` and newer within major 2, on Linux, macOS and Windows (amd64 and arm64
+where OpenCode ships them). Each release resolves onto the reviewed reference
+release of its generation for the same platform and entry, so a new official
+release needs no new table row. Pre-release builds, other majors and versions
+below the floor are refused. On macOS the operating system must additionally
+have verified the process publisher (Developer ID, Team `5NZ4Q7NXJ4`,
+identifier `opencode`), so unsigned or re-signed binaries are refused. Linux and
+Windows have no cheap equivalent, so there the range, the held live image and
+the independent clock comparison (which fails closed when the runtime disagrees
+with the Go clock) are the whole gate. This is a family-level assumption chosen
+by the owner, not per-release source evidence. The signature verifies the
+executable, not the code it runs: a signed OpenCode started with `DYLD_*` or
+`BUN_BE_BUN` in its environment can still execute other code. That was already
+true for the pinned release and is not new, but it is not closed either.
+The `opencode-range-e2e` workflow installs the plugin into official releases
+(fixed regression tags plus the latest V1 and V2) on all five platform pairs
+and requires real webhook delivery.
+
+For a genuine installed/owned host whose profile returns an unqualified result,
+the plugin prints one generic diagnostic:
+
+```text
+Agent Notifications OpenCode v2: notifications disabled (host runtime not qualified). Update Agent Notifications and see https://github.com/777genius/agent-notifications/blob/main/docs/opencode-notifications.md#compatibility-and-diagnostics.
+```
+
+It can also report `native clock policy unavailable` or `native activation
+unavailable` after verified startup. These fixed messages contain no prompts,
+session IDs, paths, version strings, exception messages or environment values.
+An unrendered, unowned or unverified helper exit does not gain a diagnostic
+channel. Optional detailed `diagnostics: true` remains separate and never
+authorizes delivery. After updating the managed plugin and binary, **restart
+OpenCode**. If the warning persists on a new OpenCode release, consult
+[issue #642](https://github.com/777genius/agent-notifications/issues/642)
+for the native qualification status; changing `context.app.version`, setting
+an environment flag or replacing binary hashes will not make it safe to emit.
+
+OpenCode bundles its own **Bun runtime**, used to execute the plugin. It is
+not an additional dependency installed by Agent Notifications. Historical
+macOS/Windows source-time adapters additionally check Bun binary identities.
+That check is a separate source-compatibility boundary, not an OpenCode
+version resolver. On macOS arm64 the JS side no longer pins the release hash
+(the Go helper decides the live image and publisher) and only requires the
+`opencode` executable (`opencode.exe` in npm packages); the runtime clock
+comparison against the independent Go clock is unchanged and still fails closed.
+Other platforms keep the exact closed list.
+
 ## Install or update
 
 Install OpenCode first. In the [guided installer](https://777genius.github.io/agent-notifications/#install),

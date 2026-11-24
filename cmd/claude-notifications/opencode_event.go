@@ -13,7 +13,6 @@ import (
 
 	"github.com/777genius/agent-notifications/internal/config"
 	"github.com/777genius/agent-notifications/internal/notification"
-	"github.com/777genius/agent-notifications/internal/opencodecodec"
 	"github.com/777genius/agent-notifications/internal/opencodeevent"
 	"github.com/777genius/agent-notifications/internal/webhook"
 )
@@ -59,16 +58,14 @@ func runOpenCodeEvent(args []string, input io.Reader, output io.Writer) int {
 					return 0
 				}
 				guard := &runtimeLifetimeGuard{lease: held, cancel: cancel}
-				selected, selectionErr := opencodeevent.SelectTrustedImageClock(runtimeImageKey(held.image))
-				candidate, known := opencodecodec.LookupCandidate(runtimeImageKey(held.image))
-				_, readerBound := runtimeReaderTuple(held.image, candidate.Version)
-				if selectionErr != nil || !known || !readerBound {
+				selections := runtimeSelections(held.image)
+				if len(selections) == 0 {
 					_ = json.NewEncoder(output).Encode(opencodeevent.Receipt{Status: "suppressed", Reason: string(opencodeevent.TimeUnverified)})
 					return 0
 				}
 				guardedSource := runtimeGuardedSnapshot{source: source, guard: guard, ctx: entry.Context()}
 				consumer := opencodeevent.ComposedConsumer{ControlRoot: root, Executable: executable, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
-					Source: guardedSource, Selection: selected, Assets: config.AssetContext{PluginRoot: filepath.Dir(executable), LookupEnv: config.OpenCodeWebhookLookup(os.LookupEnv)},
+					Source: guardedSource, Selection: selections[0], Assets: config.AssetContext{PluginRoot: filepath.Dir(executable), LookupEnv: config.OpenCodeWebhookLookup(os.LookupEnv)},
 					Desktop: func(h *opencodeevent.Handoff) notification.DeliveryPort {
 						return runtimeGuardedDelivery{port: newOpenCodeDesktopPort(h, root), guard: guard}
 					},
@@ -79,7 +76,7 @@ func runOpenCodeEvent(args []string, input io.Reader, output io.Writer) int {
 						return webhook.NewWithContext(ctx, cfg).SendWithContext(msg)
 					}}
 				if closable, ok := input.(io.ReadCloser); ok {
-					result = consumeRuntimeBoundFrame(consumer, entry, closable, owned.Origin)
+					result = consumeRuntimeBoundFrame(consumer, selections, entry, closable, owned.Origin)
 				} else {
 					result = opencodeevent.Receipt{Status: "rejected", Reason: "invalid_frame"}
 				}

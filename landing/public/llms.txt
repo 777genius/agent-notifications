@@ -1,0 +1,24 @@
+# Agent Notifications
+
+> Free, open-source notifications for local AI coding agents. Installs on the user's computer; desktop alerts, sounds, click-to-focus and optional webhooks vary by agent and platform. This website is an installation guide, not a remotely callable notification service.
+
+- Supported agent integrations include Claude, Codex CLI, OpenCode, Gemini CLI, Cursor CLI, Qoder and Pi. Features and qualified operating systems vary; read the linked support matrix before recommending setup.
+- macOS, Linux and native Windows are supported with agent-specific caveats. Native Windows setup uses Git Bash, not WSL.
+- A terminal installer is used for installation and update. Requires the chosen agent CLI on PATH, curl, Bash and python3 or Node; consult installation prerequisites.
+- Claude/Codex setup can register a local `agent-notifications` MCP server and skill for the running agent. It is NOT a hosted public MCP endpoint or an OAuth service.
+- Installation and webhook configuration modify local settings: obtain the user's consent, review official release assets and never infer credentials or webhook URLs.
+- There is no Agent Notifications product sign-up, public REST API or hosted agent tool registry.
+
+## Primary URLs
+
+- [Website and guided installer](https://agent-notifications.com/)
+- [Installation script source](https://agent-notifications.com/install.sh)
+- [Repository](https://github.com/777genius/agent-notifications)
+- [Releases](https://github.com/777genius/agent-notifications/releases)
+- [Installation prerequisites](https://github.com/777genius/agent-notifications/blob/main/docs/INSTALLATION.md)
+- [Agent/platform support matrix](https://github.com/777genius/agent-notifications#supported-agents)
+- [Notification MCP and optional skill](https://github.com/777genius/agent-notifications#install-or-update)
+- [Webhooks](https://github.com/777genius/agent-notifications/blob/main/docs/webhooks/README.md)
+- [Privacy and sign-in requirements](https://agent-notifications.com/auth.md)
+- [Instructions for AI assistants](https://agent-notifications.com/agents.md)
+- [Sitemap](https://agent-notifications.com/sitemap.xml)

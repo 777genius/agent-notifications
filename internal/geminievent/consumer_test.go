@@ -519,3 +519,57 @@ func TestClockWatcherPanicCancelsEffectWithoutCrashing(t *testing.T) {
 		t.Fatalf("unsafe clock failure outcome: %s, effect calls %d", data, calls)
 	}
 }
+
+// A late admission panic must preserve a definitive channel receipt, while an
+// effect that panicked or returned unknown remains uncertain. Claimed channels
+// stay consumed; an admission panic before either effect stays suppressed.
+func TestAdmissionPanicPreservesCompletedChannelFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name, desktop, status, reason string
+		late, effectPanic             bool
+	}{
+		{name: "beforeEffects", status: "suppressed", reason: "consumer_unavailable"},
+		{name: "submitted", late: true, desktop: "submitted", status: "submitted"},
+		{name: "rejected", late: true, desktop: "rejected", status: "rejected", reason: "delivery_unavailable"},
+		{name: "suppressed", late: true, desktop: "suppressed", status: "suppressed", reason: "consumer_unavailable"},
+		{name: "unknown", late: true, desktop: "unknown", status: "unknown", reason: "delivery_uncertain"},
+		{name: "effectPanic", late: true, effectPanic: true, desktop: "unknown", status: "unknown", reason: "delivery_uncertain"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, facts, deadline := consumerFixture(t)
+			c.Gate = testGate{channels: Channels{true, true}, check: func(_ context.Context, _ Binding, channel Channel) bool {
+				if !tc.late || channel == WebhookChannel {
+					panic("PRIVATE_GATE_ERROR")
+				}
+				return true
+			}}
+			desktopCalls, webhookCalls := 0, 0
+			c.Desktop = deliveryFunc(func(context.Context, notification.Request) notification.Receipt {
+				desktopCalls++
+				if tc.effectPanic {
+					panic("PRIVATE_EFFECT_ERROR")
+				}
+				return notification.Receipt{Status: tc.desktop}
+			})
+			c.SendWebhook = func(context.Context, *config.Config, webhook.SendContext) error { webhookCalls++; return nil }
+			got := c.Consume(context.Background(), facts, deadline)
+			if got.Status != tc.status || got.Reason != tc.reason || got.Desktop != tc.desktop || got.Webhook != "" || webhookCalls != 0 {
+				t.Fatalf("admission panic changed known effects: %+v desktop=%d webhook=%d", got, desktopCalls, webhookCalls)
+			}
+			if (desktopCalls == 1) != tc.late {
+				t.Fatalf("unexpected desktop effects: %d", desktopCalls)
+			}
+			c.Gate = testGate{channels: Channels{true, true}}
+			repeated := c.Consume(context.Background(), facts, deadline)
+			if repeated.Desktop != "duplicate" || (desktopCalls == 1) != tc.late {
+				t.Fatalf("admission panic reopened desktop claim: %+v desktop=%d", repeated, desktopCalls)
+			}
+			if !tc.late && (repeated.Webhook != "submitted" || webhookCalls != 1) {
+				t.Fatalf("early panic consumed unclaimed webhook channel: %+v webhook=%d", repeated, webhookCalls)
+			}
+			if tc.late && (repeated.Desktop != "duplicate" || repeated.Webhook != "duplicate" || desktopCalls != 1 || webhookCalls != 0) {
+				t.Fatalf("late panic reopened claimed channels: %+v desktop=%d webhook=%d", repeated, desktopCalls, webhookCalls)
+			}
+		})
+	}
+}

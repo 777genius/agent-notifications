@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import dc from 'node:diagnostics_channel';
@@ -36,14 +37,16 @@ async function setup(run,generation='v2',onDiagnostic,enrich){
  const delivery=createPreparedDelivery({registry,origin:'a'.repeat(64),policy:{...policy,generation},sourceFactory,enrich,isOwned:()=>active,
   onDiagnostic:onDiagnostic ? reason=>onDiagnostic(reason,delivery,invalidations) : undefined,
   onInvalidate:()=>{invalidations++;invalidationCallback?.();}});
- const writeClock=()=>fs.writeFile(path.join(root,'clock.json'),JSON.stringify({protocol:1,boot,clockDomain:domain,clockKind:'linux-boottime',monoLoNs:String(tick+1000000n),monoHiNs:String(tick+2000000n),wallUnixNs:String(record().wallNS),uncertaintyNs:'4000000'}));
+ const clockJSON=(receiptBoot=boot)=>JSON.stringify({protocol:1,boot:receiptBoot,clockDomain:domain,clockKind:'linux-boottime',monoLoNs:String(tick+1000000n),monoHiNs:String(tick+2000000n),wallUnixNs:String(record().wallNS),uncertaintyNs:'4000000'});
+ const writeClock=()=>fs.writeFile(path.join(root,'clock.json'),clockJSON());
+ const writeClockSync=(receiptBoot)=>fsSync.writeFileSync(path.join(root,'clock.json'),clockJSON(receiptBoot));
  await writeClock();dc.subscribe('child_process',observer);
  const advance=(n)=>{tick+=n;};
  const fact=()=>Object.freeze({version:1,kind:'question_asked',sessionID:'s',turnID:'evt_run',requestID:'request',rootSession:true,
   provenance:Object.freeze({generation:'v2',observationID:'original-request',nativeTime:Number(record().wallNS/1000000n),timeBasis:'envelope_created',nativeEventID:'evt_form'})});
  const handoff=()=>{delivery.beginIngress({type:'question.asked'});const born=delivery.clock.now();const controller=new AbortController();return {signal:controller.signal,
   ingressMonotonicMs:born,clockID:delivery.clock.id,metadataDeadline:born+2000,isCurrent:()=>!controller.signal.aborted,controller};};
- try {await run({registry,delivery,root,children,advance,writeClock,fact,handoff,fail:()=>fail=true,jump:()=>wallJump=10000000000n,invalidations:()=>invalidations,
+ try {await run({registry,delivery,root,children,advance,writeClock,writeClockSync,fact,handoff,fail:()=>fail=true,jump:()=>wallJump=10000000000n,invalidations:()=>invalidations,
   onInvalidation:(callback)=>invalidationCallback=callback,revoke:()=>active=false, postGap:(n)=>{postGap=n;}, gapObserver:()=>{tick+=postGap;}});}
  finally{delivery.dispose();await registry.dispose();dc.unsubscribe('child_process',observer);for(const c of children)if(!c.closed)c.child.kill('SIGKILL');
   for(let i=0;i<300 && children.some(c=>!c.closed);i++)await new Promise(r=>setTimeout(r,10));
@@ -132,6 +135,21 @@ test('completed helper inside 2s is refused when the independent calibration bra
   postGap(300000000n);dc.subscribe('child_process',gapObserver);
   try{assert.equal(await delivery.beforeEmit(event,h),false);}finally{dc.unsubscribe('child_process',gapObserver);}
   assert.equal(children.at(-1).closed,true);assert.equal(delivery.ready(),false);
+  // Activation helper + one slow round; the fixture's unchanged receipt is stale on
+  // the next round (a non-bracket mismatch), so it stops without a fourth child.
+  assert.equal(children.length,3);
+ });
+});
+
+// Red if the retry loses its limit: three too-slow rounds retire authority.
+test('three slow helper calibrations at event time retire authority',async()=>{
+ await setup(async({delivery,advance,writeClock,writeClockSync,fact,handoff,children,invalidations})=>{
+  await delivery.activate();advance(60000000n);const event=fact(),h=handoff();await writeClock();
+  let spawned=0;const slowEach=()=>{spawned++;advance(300000000n);writeClockSync();};
+  dc.subscribe('child_process',slowEach);
+  try{assert.equal(await delivery.beforeEmit(event,h),false);}finally{dc.unsubscribe('child_process',slowEach);}
+  assert.equal(spawned,3);assert.equal(children.length,4);assert.ok(children.every(c=>c.closed));
+  assert.equal(delivery.ready(),false);assert.ok(invalidations()>0);
  });
 });
 
@@ -160,7 +178,9 @@ test('V1 completion still requires the original bounded activation calibration',
  await setup(async({delivery,children,postGap,gapObserver})=>{
   postGap(300000000n);dc.subscribe('child_process',gapObserver);
   try{assert.equal(await delivery.activate(),false);}finally{dc.unsubscribe('child_process',gapObserver);}
-  assert.equal(delivery.ready(),false);assert.equal(children.length,1);assert.equal(children[0].closed,true);
+  // The first slow bracket is retried; this fixture's unchanged clock receipt
+  // is stale on the next attempt, so it must stop without a third child.
+  assert.equal(delivery.ready(),false);assert.equal(children.length,2);assert.ok(children.every(child=>child.closed));
  },'v1');
 });
 // Red if completion adds optional metadata/helper waits or restamps its anchor.
@@ -203,4 +223,49 @@ for(const kind of ['question_asked','terminal_error'])test(`V1 ${kind} still clo
   const h=handoff(),before=children.length;
   assert.equal(await delivery.beforeEmit(event,h),true);assert.equal(children.length,before+1);assert.equal(children.at(-1).closed,true);
  },'v1');
+});
+
+test('prefetched ingress preserves the original sample and monotonic high-water',async()=>{
+ await setup(async({delivery,advance,writeClock,fact,root})=>{
+  assert.equal(await delivery.activate(),true);advance(60000000n);
+  const native={type:'session.execution.succeeded'},event=fact(),token=delivery.captureIngress(native);
+  advance(700000000n);const laterClock=delivery.clock.now();delivery.armIngress(token,native);
+  const born=delivery.clock.now();assert.equal(born,laterClock,'prefetch must not reverse the SDK clock');delivery.nativeIngress(native);
+  await writeClock();const c=new AbortController(),handoff={signal:c.signal,clockID:delivery.clock.id,ingressMonotonicMs:born,metadataDeadline:born+2000,isCurrent:()=>true};
+  assert.equal(await delivery.beforeEmit(event,handoff),true);await delivery.emit(event,handoff);
+  const frame=parseJSON(await fs.readFile(path.join(root,'event-frame')));assert.equal(frame.provenance.ingressTickNS,'1000060000000');
+  assert.throws(()=>delivery.armIngress(token,native));assert.equal(delivery.ready(),false);
+ });
+});
+for (const mode of ['mismatch','expired','epoch','revoked']) test(`prefetched ingress rejects ${mode}`,async()=>{
+ await setup(async({delivery,advance,writeClock,revoke})=>{
+  assert.equal(await delivery.activate(),true);const event={type:'session.execution.succeeded'},token=delivery.captureIngress(event);
+  if(mode==='expired')advance(31000000000n);
+  if(mode==='epoch'){delivery.invalidate();await writeClock();assert.equal(await delivery.activate(),true);}
+  if(mode==='revoked')revoke();
+  assert.throws(()=>delivery.armIngress(token,mode==='mismatch'?{}:event));assert.equal(delivery.ready(),false);
+ });
+});
+
+// Event-time helper calibration is measured again inside the same deadline when
+// only the fixed bracket was overrun; any other mismatch stays an immediate,
+// final refusal that retires authority. Red if one slow helper kills the session.
+test('a slow helper calibration at event time is measured again and then accepted',async()=>{
+ await setup(async({delivery,advance,writeClock,writeClockSync,fact,handoff,children,invalidations})=>{
+  await delivery.activate();advance(60000000n);const event=fact(),h=handoff();await writeClock();
+  let spawned=0;
+  const slowFirst=()=>{if(spawned++===0)advance(300000000n);else writeClockSync();};
+  dc.subscribe('child_process',slowFirst);
+  try{assert.equal(await delivery.beforeEmit(event,h),true);}finally{dc.unsubscribe('child_process',slowFirst);}
+  assert.equal(spawned,2);assert.equal(children.length,3);assert.ok(children.every(c=>c.closed));
+  assert.equal(delivery.ready(),true);assert.equal(invalidations(),0);
+ });
+});
+test('a mismatched helper calibration at event time is refused at once, without another helper',async()=>{
+ await setup(async({delivery,advance,writeClockSync,fact,handoff,children})=>{
+  await delivery.activate();advance(60000000n);const event=fact(),h=handoff();
+  writeClockSync('99999999-2222-3333-4444-555555555555');
+  assert.equal(await delivery.beforeEmit(event,h),false);
+  assert.equal(children.length,2);assert.equal(delivery.ready(),false);
+ });
 });

@@ -37,6 +37,20 @@ failed_logs() {
     fi
 }
 trap failed_logs EXIT
+
+# The public plain-mode bootstrap keeps underlying command output in private
+# diagnostics. Assert the exact failure there without exporting that private
+# log (which may contain host paths, identifiers or other sensitive values).
+installer_said() {
+    local profile=$1 visible=$2 expected=$3 log
+    if grep -Fq -- "$expected" "$visible"; then return 0; fi
+    [ -d "$profile/diagnostics" ] && [ ! -L "$profile/diagnostics" ] || return 1
+    for log in "$profile"/diagnostics/installer-*.log; do
+        [ -f "$log" ] && [ ! -L "$log" ] || continue
+        if grep -Fq -- "$expected" "$log"; then return 0; fi
+    done
+    return 1
+}
 "$python" - "$evidence" "$source_sha" "$repo/scripts/pi-installer-macos-e2e.sh" <<'PYHOST'
 import hashlib, json, os, platform, sys
 from pathlib import Path
@@ -75,28 +89,124 @@ run_installer() {
         "$@" /bin/bash "$script" --products pi --desktop --plain </dev/null > "$log" 2>&1
 }
 
+# Observe only the real public loader's last curl response, without changing
+# its bytes, arguments, clean HOME/PATH, unauthenticated requests or exit status.
+# Raw headers stay in the disposable profile (never in uploaded evidence).
+sanitize_public_provenance_headers() {
+    awk '
+        { sub(/\r$/, "") }
+        /^HTTP\/[0-9.]+ [0-9][0-9][0-9]([[:space:]]|$)/ {
+            status = $2
+            for (k in values) delete values[k]
+            next
+        }
+        {
+            colon = index($0, ":")
+            if (!colon) next
+            key = tolower(substr($0, 1, colon - 1))
+            value = substr($0, colon + 1)
+            sub(/^[[:blank:]]+/, "", value)
+            sub(/[[:blank:]]+$/, "", value)
+            if (key == "x-github-request-id" && value ~ /^[0-9A-Fa-f:]+$/ && length(value) <= 128)
+                values[key] = value
+            else if ((key == "x-ratelimit-remaining" || key == "x-ratelimit-reset" || key == "retry-after") && value ~ /^[0-9]+$/ && length(value) <= 20)
+                values[key] = value
+        }
+        END {
+            if (status != "") print "http_status=" status
+            split("x-ratelimit-remaining x-ratelimit-reset retry-after x-github-request-id", keys, " ")
+            for (i = 1; i <= 4; i++) if (keys[i] in values) print keys[i] "=" values[keys[i]]
+        }'
+}
+# Regression: keep only the final response and strictly allowlisted values.
+header_fixture=$(printf 'HTTP/1.1 302 Found\r\nX-RateLimit-Remaining: 9\r\n\r\nHTTP/2 403\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 1234567890\r\nRetry-After: unexpected\r\nX-GitHub-Request-Id: ABCD:1234\r\nSet-Cookie: private\r\n\r\n' | sanitize_public_provenance_headers)
+[ "$header_fixture" = $'http_status=403\nx-ratelimit-remaining=0\nx-ratelimit-reset=1234567890\nx-github-request-id=ABCD:1234' ]
+
+run_public_installer() {
+    local profile=$1 selected_path=$2 log=$3 status=0
+    local curl_home="$1/curl-diagnostics" headers="$1/curl-diagnostics/last-headers" output
+    mkdir -p -m 700 "$curl_home" || return 1
+    # The only curl config option is response-header capture. No auth or retry.
+    printf 'dump-header = "%s"\n' "$headers" > "$curl_home/.curlrc" || return 1
+    run_installer "$profile" "$selected_path" "$evidence/public-install.sh" "$log" \
+        "CURL_HOME=$curl_home" || status=$?
+    if [ "$status" -ne 0 ] && awk '
+        /Verifying release provenance\.\.\./ { pending=1; next }
+        pending && /curl: \([0-9]+\) The requested URL returned error: 403/ { found=1 }
+        { pending=0 }
+        END { exit !found }
+    ' "$log"; then
+        output="$evidence/$(basename "$log").provenance-headers.txt"
+        if [ -f "$headers" ]; then
+            sanitize_public_provenance_headers < "$headers" > "$output" || true
+        else
+            printf 'http_status=unavailable\n' > "$output"
+        fi
+        cat "$output" >&2 || true
+    fi
+    rm -f -- "$headers" "$curl_home/.curlrc" || true
+    return "$status"
+}
+
 # The exact reported discovery failure remains independently reproducible.
 missing_status=0
-run_installer "$root/missing" /usr/bin:/bin:/usr/sbin:/sbin "$evidence/public-install.sh" \
+run_public_installer "$root/missing" /usr/bin:/bin:/usr/sbin:/sbin \
     "$evidence/public-missing-path.log" || missing_status=$?
 [ "$missing_status" -ne 0 ]
-grep -Fq 'setup-products: pi prerequisite unavailable: not found in selected PATH' "$evidence/public-missing-path.log"
+installer_said "$root/missing" "$evidence/public-missing-path.log" 'setup-products: pi prerequisite unavailable: not found in selected PATH'
 printf '%s\n' "$missing_status" > "$evidence/public-missing-path.exit"
 
 # Retain the original released installation regression separately from candidate
 # success. A future corrected stable release may complete this same baseline.
 public_status=0
-run_installer "$root/public" "$(dirname "$pi"):/usr/bin:/bin:/usr/sbin:/sbin" \
-    "$evidence/public-install.sh" "$evidence/public-real-pi.log" || public_status=$?
+run_public_installer "$root/public" "$(dirname "$pi"):/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$evidence/public-real-pi.log" || public_status=$?
 printf '%s\n' "$public_status" > "$evidence/public-real-pi.exit"
 if [ "$public_status" -eq 0 ]; then
     public_outcome=completed
 else
-    grep -Fq 'concurrent_change' "$evidence/public-real-pi.log"
+    installer_said "$root/public" "$evidence/public-real-pi.log" 'concurrent_change'
     public_outcome=failed_concurrent_change
 fi
 printf '%s\n' "$public_outcome" > "$evidence/public-real-pi.outcome"
-if grep -Fq 'pi prerequisite unavailable' "$evidence/public-real-pi.log"; then exit 1; fi
+if installer_said "$root/public" "$evidence/public-real-pi.log" 'pi prerequisite unavailable'; then exit 1; fi
+
+# LaunchServices is system-wide: a successful public baseline leaves a real
+# callback reader that can take precedence over the *separately installed*
+# candidate despite the two installers' private HOME roots. Remove ONLY this
+# disposable baseline's own verified app registration before candidate begins.
+# Do not unregister unknown, active, foreign or non-TEST applications.
+public_native=$("$python" - "$root/public" "$public_status" <<'PYOWNED'
+import json, plistlib, sys
+from pathlib import Path
+base = Path(sys.argv[1]).resolve(strict=True)
+completed = sys.argv[2] == '0'
+owned_root = (base / 'home').resolve(strict=True)
+ledger = owned_root / 'Library/Application Support/agent-notifications/ownership.json'
+if not ledger.is_file():
+    raise SystemExit('completed public install missing native ownership ledger' if completed else 0)
+native = (json.loads(ledger.read_text()).get('Native') or {}).get('Path')
+if not native:
+    raise SystemExit('completed public install missing native app path' if completed else 0)
+p = Path(native)
+if not p.is_absolute() or not p.is_dir():
+    raise SystemExit('completed public install has unavailable native app path' if completed else 0)
+real = p.resolve(strict=True)
+if p != real or not real.is_relative_to(owned_root) or real.suffix != '.app':
+    raise SystemExit('refused non-owned public LaunchServices cleanup')
+with (real / 'Contents/Info.plist').open('rb') as file:
+    bundle_id = plistlib.load(file).get('CFBundleIdentifier')
+if bundle_id != 'com.777genius.agent-notifications':
+    raise SystemExit('refused foreign public LaunchServices cleanup')
+print(real)
+PYOWNED
+)
+if [ -n "$public_native" ]; then
+    lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+    "$lsregister" -u "$public_native"
+    rm -rf -- "$public_native"
+    printf '%s\n' 'retired only the owned disposable public callback reader before independent candidate' > "$evidence/public-native-isolation.txt"
+fi
 
 # Download the released inputs once, retain their original manifest, and verify
 # original bytes before reusing only the authentic signed native helper.

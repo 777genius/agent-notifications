@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -206,5 +207,106 @@ func TestSetupProductsRepairBootstrapCancellationIsFatal(t *testing.T) {
 	var output, prompts bytes.Buffer
 	if code := runSetupProductsContext(ctx, []string{"repair-cache", "--control-root", filepath.Join(t.TempDir(), "absent"), "--bootstrap", "--yes"}, strings.NewReader(""), &output, &prompts); code == 0 || output.Len() != 0 {
 		t.Fatalf("cancellation allowed bootstrap continuation: %d %q", code, output.String())
+	}
+}
+
+func TestSetupProductsRepairLinuxMarketplaceReinstall(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("issue #585 describes Linux amd64 marketplace assets")
+	}
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := filepath.Join(base, "control")
+	root := filepath.Join(base, ".claude", "plugins", "cache", "claude-notifications-go", "claude-notifications-go", "1.50.0")
+	executable := filepath.Join(root, "bin", "claude-notifications-linux-amd64")
+	alias := filepath.Join(root, "bin", "claude-notifications")
+	skill := filepath.Join(root, "skills", "agent-notifications", "SKILL.md")
+	ctx := setupCommandContext(t)
+	before, err := installruntime.Commit(ctx, installruntime.Request{ControlRoot: control, RuntimeRoot: root,
+		Owner: "existing-installer", ConsumerID: "claude-hooks",
+		Files: []installruntime.File{
+			{Path: executable, Data: []byte("TEST installed runtime\n" + installruntime.WriterProtocolMarker), Mode: 0700},
+			{Path: alias, Link: filepath.Base(executable)},
+			{Path: skill, Data: []byte("# TEST packaged skill\n"), Mode: 0600},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(executable); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("claude-notifications-darwin-arm64", alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(skill, 0644); err != nil {
+		t.Fatal(err)
+	}
+	var output, prompts bytes.Buffer
+	code := runSetupProducts([]string{"repair-cache", "--control-root", control, "--bootstrap", "--yes"},
+		strings.NewReader(""), &output, &prompts)
+	if code != 0 || output.String() != "ready\n" {
+		t.Fatalf("reinstalled cache repair failed: code=%d stdout=%q stderr=%q", code, output.String(), prompts.String())
+	}
+	after, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || after.Ledger.Generation != before.Generation+1 || !reflect.DeepEqual(after.Ledger.Files, before.Files) {
+		t.Fatalf("reinstall repair did not publish the recorded files: %v %+v", err, after)
+	}
+	for _, path := range []string{executable, alias, skill} {
+		got, err := installruntime.Fingerprint(path)
+		if err != nil || got != before.Files[path] {
+			t.Fatalf("repair left invalid %s: %+v %v", path, got, err)
+		}
+	}
+	output.Reset()
+	prompts.Reset()
+	code = runSetupProducts([]string{"repair-cache", "--control-root", control, "--bootstrap", "--yes"},
+		strings.NewReader(""), &output, &prompts)
+	if code != 0 || output.String() != "ready\n" || prompts.Len() != 0 {
+		t.Fatalf("idempotent reinstallation failed: code=%d stdout=%q stderr=%q", code, output.String(), prompts.String())
+	}
+}
+
+func TestSetupProductsBootstrapRepairRejectsUnclassifiedPreviewError(t *testing.T) {
+	for _, damage := range []string{"corrupt-ledger", "invalid-lock"} {
+		t.Run(damage, func(t *testing.T) {
+			base, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			control := filepath.Join(base, "control")
+			runtimeRoot := filepath.Join(base, "plugins", "cache", "claude-notifications-go", "claude-notifications-go", "1.50.0")
+			if _, err := installruntime.Commit(setupCommandContext(t), installruntime.Request{
+				ControlRoot: control, RuntimeRoot: runtimeRoot, Owner: "existing-installer", ConsumerID: "claude-hooks",
+				Files: []installruntime.File{{Path: filepath.Join(runtimeRoot, "bin", "TEST-runtime"),
+					Data: []byte("TEST managed executable" + installruntime.WriterProtocolMarker), Mode: 0700}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			switch damage {
+			case "corrupt-ledger":
+				err = os.WriteFile(filepath.Join(control, "ownership.json"), []byte("{TEST-corrupt"), 0600)
+			case "invalid-lock":
+				path := filepath.Join(control, ".component-install.lock")
+				err = os.Remove(path)
+				if err == nil {
+					err = os.Symlink(filepath.Join(base, "foreign-lock"), path)
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := setupCommandTree(t, base)
+			var output, prompts bytes.Buffer
+			code := runSetupProducts([]string{"repair-cache", "--control-root", control, "--bootstrap", "--yes"},
+				strings.NewReader(""), &output, &prompts)
+			if code == 0 || output.Len() != 0 || !reflect.DeepEqual(before, setupCommandTree(t, base)) {
+				t.Fatalf("bootstrap reported ready after %s: status=%d output=%q stderr=%q", damage, code, output.String(), prompts.String())
+			}
+		})
 	}
 }

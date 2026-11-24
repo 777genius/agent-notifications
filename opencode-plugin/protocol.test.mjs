@@ -35,6 +35,17 @@ test('closed JSON rejects duplicates, trailing frames, unsafe numeric syntax, de
 test('clock and profile receipts are closed prerequisites; malformed proof is unusable',()=>{
  const r=profileReceipt(Buffer.from('{"protocol":1,"semantic":"unverified","generation":"none","resourceClosure":"reaped_or_not_started"}'));
  assert.equal(r.semantic,'unverified');
+ const eligible = (generation, version) => profileReceipt(Buffer.from(JSON.stringify({
+  protocol: 1, semantic: 'eligible', generation, resourceClosure: 'reaped_or_not_started', version,
+ })));
+ for (const [generation, version] of [['v1', '1.18.33'], ['v1', '1.18.99'], ['v2', '2.0.21'],
+  ['v2', '2.2.6'], ['v2', '2.99.0'], ['v2', '2.99.0-rc.1+build.03']]) assert.equal(eligible(generation, version).version, version);
+ for (const [generation, version] of [['v1', '2.2.6'], ['v2', '1.18.33'], ['v2', '3.0.0'],
+  ['v2', '02.2.6'], ['v2', '2.2'], ['v2', '2.2.6-01'], ['v2', '2.2.6-a..b'],
+  ['v2', '2.2.6-a.'], ['v2', '2.2.6+build..x'], ['v2', 'PRIVATE_SENTINEL']]) {
+  assert.throws(() => eligible(generation, version));
+ }
+ assert.throws(() => profileReceipt(Buffer.from('{"protocol":1,"semantic":"eligible","generation":"v2","resourceClosure":"reaped_or_not_started"}')));
  for(const s of ['{"protocol":1,"semantic":"eligible","generation":"none","resourceClosure":"reaped_or_not_started"}',
   '{"protocol":1,"semantic":"unverified","generation":"none","resourceClosure":"reaped_or_not_started","version":"2.0.21"}']) assert.throws(()=>profileReceipt(Buffer.from(s)));
  const good='{"protocol":1,"boot":"11111111-2222-3333-4444-555555555555","clockDomain":"linux-time:4:4026531834","clockKind":"linux-boottime","monoLoNs":"1000000","monoHiNs":"2000000","wallUnixNs":"1700000000000000000","uncertaintyNs":"4000000"}';

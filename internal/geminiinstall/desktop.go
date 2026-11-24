@@ -3,25 +3,25 @@ package geminiinstall
 import (
 	"context"
 
+	"github.com/777genius/agent-notifications/internal/desktopinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
-	"github.com/777genius/agent-notifications/internal/opencodeinstall"
 )
 
 // GeminiToastAppID is shared by actual shortcut staging/readiness and the
 // trusted Windows toast factory supplied by the business consumer lane.
 const (
-	GeminiToastAppID = opencodeinstall.GeminiToastAppID
-	consumerID       = opencodeinstall.GeminiConsumerID
+	GeminiToastAppID = desktopinstall.GeminiToastAppID
+	consumerID       = desktopinstall.GeminiConsumerID
 )
 
 func PrepareNativeSpool(ctx context.Context, controlRoot string) (string, error) {
-	return opencodeinstall.PrepareNativeSpoolFor(ctx, controlRoot, opencodeinstall.GeminiDesktop)
+	return desktopinstall.PrepareNativeSpoolFor(ctx, controlRoot, desktopinstall.GeminiDesktop)
 }
 
 func StageWindowsShortcut(home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
-	return opencodeinstall.StageWindowsShortcut(opencodeinstall.GeminiDesktop, home, target, desktop, ledger)
+	return desktopinstall.StageWindowsShortcut(desktopinstall.GeminiDesktop, home, target, desktop, ledger)
 }
 
 func WindowsShortcutReady(controlRoot, executable string) error {
-	return opencodeinstall.WindowsShortcutReadyFor(opencodeinstall.GeminiDesktop, controlRoot, executable)
+	return desktopinstall.WindowsShortcutReadyFor(desktopinstall.GeminiDesktop, controlRoot, executable)
 }

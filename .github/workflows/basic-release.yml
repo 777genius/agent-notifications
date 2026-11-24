@@ -8,7 +8,7 @@ on:
         type: string
         required: true
       release_tag:
-        description: Stable semver tag explicitly excluded from the full release workflow
+        description: Stable semver tag for the sealed draft (created only after qualification)
         type: string
         required: true
       signing_run:
@@ -98,10 +98,10 @@ jobs:
           test "$(jq -er '.metadata.version' .claude-plugin/marketplace.json)" = "$version"
           test "$(jq -er '.plugins[] | select(.name=="claude-notifications-go") | .version' .claude-plugin/marketplace.json)" = "$version"
           awk -v version="$version" 'index($0, "## [" version "]") == 1 {found=1} END {exit !found}' CHANGELOG.md
-          grep -Fx "      - '!$RELEASE_TAG'" .github/workflows/release.yml
-      - name: Require operator tag exclusion
+          test ! -e .github/workflows/release.yml
+      - name: Require operator without retired tag-triggered workflow
         shell: bash
-        run: grep -Fx "      - '!$RELEASE_TAG'" operator/.github/workflows/release.yml
+        run: test ! -e operator/.github/workflows/release.yml
       - uses: actions/setup-node@v7
         with: {node-version: '24'}
       - name: Require unused immutable tag and no existing release including drafts

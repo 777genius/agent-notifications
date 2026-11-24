@@ -180,6 +180,7 @@ def run(args):
         terminal = None
         row = {"case": action, "scope": "actual_installed_pi_linux_tui", "status": "running", "phase": "tui_startup"}
         report["lifecycle_cases"].append(row)
+        prior_destination_baseline = len(sink.rows)
         try:
             native_env = desktop_env(F.prepare(case_root, provider, "success", agent_dir=profile))
             P.configure(root / "global/config.json", args.assets_root / "config/config.json", destination,
@@ -218,7 +219,19 @@ def run(args):
                 P.require(time.monotonic() - started < 5, "native_pi_settlement_or_prompt_stalled")
                 row.update(observations_before_control=index + 1, admitted_webhook_requests=len(destination.rows))
                 if index == 0:
-                    destination.wait("question" if action == "prompt-end" else "task_complete", timeout=5)
+                    try:
+                        destination.wait("question" if action == "prompt-end" else "task_complete", timeout=5)
+                    except RuntimeError as error:
+                        if str(error) == "installed_pi_webhook_timeout":
+                            # Preserve a bounded, payload-free indication of whether
+                            # the product targeted the preceding case's destination.
+                            # Never treat either destination as successful delivery.
+                            row["webhook_timeout_diagnostic"] = {
+                                "expected_destination_requests": len(destination.rows),
+                                "previous_destination_requests_since_start": max(0, len(sink.rows) - prior_destination_baseline),
+                                "expected_destination_rejections": len(destination.failures),
+                            }
+                        raise
                 # The first HTTP handoff retains the exclusive installation
                 # lease. The second real Go child waits on that same lease;
                 # it cannot submit a second request until the first releases.
@@ -543,6 +556,19 @@ def run(args):
     except Exception as error:
         report["failure"] = str(error)
     finally:
+        # The preflight probe lives in Lab's private report, not this uploaded
+        # acceptance record. Surface only fixed, bounded classifications so an
+        # X11 fixture failure is diagnosable without logging client/window IDs,
+        # paths, commands or native process output. This is not a PASS receipt.
+        probe = lab.report.get("xterm_probe")
+        if isinstance(probe, dict):
+            report["fixture_xterm_probe"] = {
+                "role": probe.get("role") if probe.get("role") in ("origin", "distractor") else "unknown",
+                "pid_lookup_ok": probe.get("lookup_status") == 0,
+                "single_pid_window": probe.get("visible_pid_window_count") == 1,
+                "single_title_window": probe.get("title_visible_window_count") == 1,
+                "title_owner_verified": probe.get("title_owner_verified") is True,
+            }
         # Preserve the closed tool/exit category of the first failed private
         # fixture command without exposing its stdout, stderr or environment.
         if "command_failure" in lab.report:

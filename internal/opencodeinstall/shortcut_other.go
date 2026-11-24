@@ -3,34 +3,19 @@
 package opencodeinstall
 
 import (
-	"errors"
-
+	"github.com/777genius/agent-notifications/internal/desktopinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
-func windowsShortcutPath(string) (string, error) {
-	return "", errors.New("windows shortcut requires Windows")
+func stageWindowsShortcutForSetup(home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
+	return desktopinstall.StageWindowsShortcut(desktopinstall.OpenCodeDesktop, home, target, desktop, ledger)
 }
-func inspectWindowsShortcut(string) (string, string, string, error) {
-	return "", "", "", errors.New("windows shortcut requires Windows")
+func StageWindowsShortcut(product DesktopProduct, home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
+	return desktopinstall.StageWindowsShortcut(product, home, target, desktop, ledger)
 }
-func sameWindowsFile(string, string) bool { return false }
-func windowsShortcutReady(string, string, string) error {
-	return errors.New("windows shortcut requires Windows")
+func WindowsShortcutReadyFor(product DesktopProduct, controlRoot, executable string) error {
+	return desktopinstall.WindowsShortcutReadyFor(product, controlRoot, executable)
 }
-
-func stageWindowsShortcutForSetup(string, string, bool, installruntime.Ledger) (*installruntime.File, error) {
-	return nil, errors.New("windows shortcut setup requires Windows")
-}
-
-func StageWindowsShortcut(DesktopProduct, string, string, bool, installruntime.Ledger) (*installruntime.File, error) {
-	return nil, errors.New("windows shortcut setup requires Windows")
-}
-
-func WindowsShortcutReadyFor(DesktopProduct, string, string) error {
-	return errors.New("windows shortcut requires Windows")
-}
-
-func StageCursorWindowsShortcut(string, string, string, bool, installruntime.Ledger) (*installruntime.File, error) {
-	return nil, errors.New("windows shortcut setup requires Windows")
+func StageCursorWindowsShortcut(key, home, target string, desktop bool, ledger installruntime.Ledger) (*installruntime.File, error) {
+	return desktopinstall.StageCursorWindowsShortcut(key, home, target, desktop, ledger)
 }

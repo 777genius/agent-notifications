@@ -2897,57 +2897,97 @@ func TestHandler_Stop_TeamMode_StaleTranscriptKeepsTeamState(t *testing.T) {
 }
 
 func TestHandler_TeammateIdle_SendsWhenAllReady(t *testing.T) {
-	sessionID := "test-ti-session"
-	teamName := "test-ti-team"
-	claudeDir := setupTeamConfig(t, teamName, sessionID, []string{"alice", "bob"})
-	setTestHome(t, claudeDir)
+	status, folder, noBranch := "task_complete", "team-project", ""
+	otherStatus := "question"
+	for _, tc := range []struct {
+		name    string
+		filters []config.SuppressFilter
+		deliver bool
+	}{
+		{name: "unfiltered", deliver: true},
+		{name: "suppressed", filters: []config.SuppressFilter{{Status: &status, Folder: &folder, GitBranch: &noBranch}}},
+		{name: "unmatched", filters: []config.SuppressFilter{{Status: &otherStatus}}, deliver: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sessionID := "test-ti-session-" + tc.name
+			teamName := "test-ti-team-" + tc.name
+			claudeDir := setupTeamConfig(t, teamName, sessionID, []string{"alice", "bob"})
+			setTestHome(t, claudeDir)
 
-	cfg := &config.Config{
-		Notifications: config.NotificationsConfig{
-			Desktop:  config.DesktopConfig{Enabled: true},
-			TeamMode: "wait-all",
-		},
-		Statuses: map[string]config.StatusInfo{
-			"task_complete": {Title: "Completed"},
-		},
-	}
+			cfg := &config.Config{
+				Notifications: config.NotificationsConfig{
+					Desktop:         config.DesktopConfig{Enabled: true},
+					Webhook:         config.WebhookConfig{Enabled: true, URL: "http://localhost/test"},
+					SuppressFilters: tc.filters,
+					TeamMode:        "wait-all",
+				},
+				Statuses: map[string]config.StatusInfo{
+					"task_complete": {Title: "Completed"},
+				},
+			}
 
-	handler, mockNotif, _ := newTestHandler(t, cfg)
+			handler, mockNotif, mockWH := newTestHandler(t, cfg)
 
-	// Pre-record: lead stopped + alice already idle
-	teamMgr := setupTeamStateManager(t, claudeDir)
-	teamMgr.RecordLeadStopped(teamName)           //nolint:errcheck
-	teamMgr.RecordTeammateIdle(teamName, "alice") //nolint:errcheck
+			// Pre-record: lead stopped + alice already idle
+			teamMgr := setupTeamStateManager(t, claudeDir)
+			teamMgr.RecordLeadStopped(teamName)           //nolint:errcheck
+			teamMgr.RecordTeammateIdle(teamName, "alice") //nolint:errcheck
 
-	// Bob's hook has its own session ID, but the completion belongs to the lead.
-	hookData := buildHookDataJSON(HookData{
-		SessionID:    "test-ti-bob-session",
-		TeamName:     teamName,
-		TeammateName: "bob",
-		CWD:          "/test",
-	})
+			// Bob's hook has its own session ID, but the completion belongs to the lead.
+			hookData := buildHookDataJSON(HookData{
+				SessionID:    "test-ti-bob-session",
+				TeamName:     teamName,
+				TeammateName: "bob",
+				CWD:          filepath.Join(t.TempDir(), "team-project"),
+			})
 
-	err := handler.HandleHook("TeammateIdle", hookData)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+			err := handler.HandleHook("TeammateIdle", hookData)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
-	if !mockNotif.wasCalled() {
-		t.Error("expected notification when last teammate goes idle and lead has stopped")
-	}
-	leadState, err := handler.stateMgr.Load(sessionID)
-	if err != nil {
-		t.Fatalf("load lead notification state: %v", err)
-	}
-	if leadState == nil || leadState.LastTaskCompleteTime == 0 {
-		t.Fatal("delivered team completion did not start the lead's cooldown")
-	}
-	bobState, err := handler.stateMgr.Load("test-ti-bob-session")
-	if err != nil {
-		t.Fatalf("load teammate notification state: %v", err)
-	}
-	if bobState != nil && bobState.LastTaskCompleteTime != 0 {
-		t.Fatal("team completion started the teammate's cooldown")
+			if mockNotif.wasCalled() != tc.deliver || mockWH.wasCalled() != tc.deliver {
+				t.Fatalf("team delivery: desktop=%v webhook=%v, want %v", mockNotif.wasCalled(), mockWH.wasCalled(), tc.deliver)
+			}
+			leadState, err := handler.stateMgr.Load(sessionID)
+			if err != nil {
+				t.Fatalf("load lead notification state: %v", err)
+			}
+			hasCooldown := leadState != nil && leadState.LastTaskCompleteTime != 0
+			if hasCooldown != tc.deliver {
+				t.Fatalf("lead cooldown = %v, want %v", hasCooldown, tc.deliver)
+			}
+			bobState, err := handler.stateMgr.Load("test-ti-bob-session")
+			if err != nil {
+				t.Fatalf("load teammate notification state: %v", err)
+			}
+			if bobState != nil && bobState.LastTaskCompleteTime != 0 {
+				t.Fatal("team completion started the teammate's cooldown")
+			}
+			if !tc.deliver {
+				// The suppressed teammate may become the last idle member, but
+				// must not consume the team's claim before an eligible lead Stop.
+				teamState, err := teamMgr.LoadState(teamName)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !teamState.LeadStopped || teamState.NotifiedAt != 0 ||
+					teamState.IdleMembers["alice"] == 0 || teamState.IdleMembers["bob"] == 0 {
+					t.Fatalf("suppressed teammate lost the pending team completion: %+v", teamState)
+				}
+				leadStop := buildHookDataJSON(HookData{
+					SessionID:      sessionID,
+					TranscriptPath: createTempTranscript(t, buildTranscriptWithTools([]string{"Write"}, 50)),
+					CWD:            filepath.Join(t.TempDir(), "lead-project"),
+				})
+				if err := handler.HandleHook("Stop", leadStop); err != nil {
+					t.Fatal(err)
+				}
+				if mockNotif.callCount() != 1 || !mockWH.wasCalled() {
+					t.Fatalf("eligible lead Stop lost team completion: desktop=%d webhook=%v", mockNotif.callCount(), mockWH.wasCalled())
+				}
+			}
+		})
 	}
 }
 

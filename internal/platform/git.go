@@ -1,8 +1,13 @@
 package platform
 
 import (
+	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 )
 
 // GitMetadata contains commonly requested git values for a working tree.
@@ -20,6 +25,115 @@ type GitMetadata struct {
 // Returns empty string if not in a git repository or on error.
 func GetGitBranch(cwd string) string {
 	return getGitOutput(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+}
+
+// GetGitBranchContext bounds a hook's optional git metadata lookup. A git
+// subprocess (or a descendant holding stdout) must not consume the host hook
+// deadline. Fail open with no branch label; never delay the notification.
+func GetGitBranchContext(ctx context.Context, cwd string) string {
+	if ctx == nil || ctx.Err() != nil || cwd == "" {
+		return ""
+	}
+	op, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(op, "git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Env = gitDiscoveryEnv()
+	cmd.WaitDelay = 200 * time.Millisecond
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	value := strings.TrimSpace(string(output))
+	if value == "HEAD" {
+		return ""
+	}
+	return value
+}
+
+// GetGitRepoNameContext returns the repository name for cwd: the basename of
+// the main working tree, so linked worktrees and subdirectories report the
+// repository rather than their own folder. Like GetGitBranchContext it is
+// bounded by ctx and fails open with "".
+func GetGitRepoNameContext(ctx context.Context, cwd string) string {
+	if ctx == nil || ctx.Err() != nil || cwd == "" {
+		return ""
+	}
+	// These rev-parse options are all older than git 2.13. git prints each
+	// on its own line; --git-dir and --git-common-dir may be relative to cwd.
+	out := gitOutputContext(ctx, cwd, "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir")
+	lines := strings.Split(out, "\n")
+	if len(lines) != 3 || lines[0] == "" {
+		return ""
+	}
+	for i := range lines {
+		lines[i] = strings.TrimSpace(lines[i])
+	}
+	top := lines[0]
+	gitDir, commonDir := absUnder(cwd, lines[1]), absUnder(cwd, lines[2])
+	// A linked worktree has its own git dir inside the shared common dir,
+	// which belongs to the main working tree. Otherwise cwd is in the main
+	// working tree, even when its git dir lives elsewhere (--separate-git-dir).
+	if gitDir != commonDir {
+		return repoNameFromCommonDir(commonDir)
+	}
+	return filepath.Base(top)
+}
+
+// absUnder resolves a path printed by git relative to cwd, following symlinks
+// where possible so equal directories compare equal.
+func absUnder(cwd, p string) string {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(cwd, p)
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		p = resolved
+	}
+	return filepath.Clean(p)
+}
+
+// repoNameFromCommonDir maps "<repo>/.git" to "<repo>" and a bare
+// "<repo>.git" to "<repo>".
+func repoNameFromCommonDir(dir string) string {
+	dir = filepath.Clean(dir)
+	base := filepath.Base(dir)
+	if base == ".git" {
+		return filepath.Base(filepath.Dir(dir))
+	}
+	return strings.TrimSuffix(base, ".git")
+}
+
+func gitOutputContext(ctx context.Context, cwd string, args ...string) string {
+	op, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(op, "git", append([]string{"-C", cwd}, args...)...)
+	cmd.Env = gitDiscoveryEnv()
+	cmd.WaitDelay = 200 * time.Millisecond
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
+// gitDiscoveryEnv keeps repository selection tied to cwd, not the shell that
+// launched the hook (which might be inside a different Git repository).
+func gitDiscoveryEnv() []string {
+	env := os.Environ()
+	filtered := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		// Windows environment variables are case-insensitive, so Git_Dir
+		// is as capable of redirecting discovery as GIT_DIR.
+		if runtime.GOOS == "windows" {
+			key = strings.ToUpper(key)
+		}
+		switch key {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES":
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 // GetGitMetadata returns commonly used git metadata for the given directory.
@@ -63,6 +177,7 @@ func getGitOutput(cwd string, args ...string) string {
 	}
 
 	cmd := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+	cmd.Env = gitDiscoveryEnv()
 	output, err := cmd.Output()
 	if err != nil {
 		return ""

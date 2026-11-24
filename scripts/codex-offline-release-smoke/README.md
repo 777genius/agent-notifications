@@ -91,6 +91,13 @@ inherited. Wrappers come from `git archive C`; symlink copies use
 checks SourceCommit/Version/SHA of that same executable before idempotent setup.
 Repeated setup must preserve fixture Claude files and hook definitions.
 
+Private TEST processes receive the fixed `RUST_LOG=info,codex_hooks=trace` filter
+to request additional native telemetry in TEST logs and captured stderr. The
+filter is not inherited from the operator environment. The actual CLI may emit
+general INFO records without an explicit hook exit or timeout outcome; absence
+of such a record remains unknown. This does not establish the cause of a previous
+failure or change the native Stop/webhook acceptance requirements.
+
 Keep exactly one owned `server` process live, save its process handle and wait
 for `server-ready.json`. From a separate genuine controlling TTY:
 
@@ -104,6 +111,28 @@ public alias for the retained `tui` observer phase. Never write trust state by
 hand, invent a trust API, use bypass flags, inject Stop, or invoke `tap` manually.
 Authorized UI automation may operate this real TTY. Never submit a model prompt
 in the trust TUI.
+
+In the pinned **Codex CLI 0.162.0** TUI, `/hooks` is an event/handler browser.
+Select the **Stop** event and press **Enter** to open its handlers. Review the
+notification wrapper and observation tap commands separately, selecting each
+handler and pressing **t** to trust that handler. Do **not** press `t` on the
+event-list page (that trusts *all* listed hooks). On a handler, **Enter** and
+**Space** toggle an already-trusted hook; they do **not** grant trust.
+
+A handler may appear `Trusted` immediately after `t` while Codex writes its
+`trusted_hash` asynchronously through `config/batchWrite`. Keep the TUI open
+long enough to observe any write error. Reopen `/hooks` to review the two Stop
+handlers again before exiting normally. A visible `Trusted` label alone does
+not prove persistence. For diagnosis, only *read* the private
+`ROOT/codex/config.toml` (`[hooks.state]`): the two Stop keys' stored hashes
+should match their current hashes. The independent app-server `hooks/list`
+check in the `turn` preflight is authoritative for the test, and must report
+both Stop commands as enabled, unmanaged, and `trusted`. The preflight saves
+`ROOT/hooks-list.json` before checking trust and does not create
+`ROOT/turn-started.json` or submit any prompt if trust is missing. Retain both
+the file and the TUI/console error as failure evidence; never hand-edit
+`trusted_hash`, bypass trust, or retry an uncertain turn. Use a fresh,
+explicitly approved TEST context for a new attempt.
 
 ```sh
 "$NODE_ARM64" "$SMOKE" turn "$INPUTS_JSON"

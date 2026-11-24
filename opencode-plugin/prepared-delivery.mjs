@@ -21,8 +21,8 @@ export function anchorMatches(anchor, before, after, policy) {
 // Ports are private composition dependencies. The plugin never accepts them
 // from host configuration/environment; only the closed compiled ledger supplies policy.
 export function createPreparedDelivery({ registry, origin, policy, isOwned, onInvalidate, onDiagnostic, enrich, sourceFactory = createPlatformClock }) {
-  let epoch, source, anchor, activation, pending, last, ingress, disposed = false;
-  const originals = new Map(), prepared = new WeakMap();
+  let epoch, source, anchor, activation, pending, last, ingress, observedIngress, lastClockMs, disposed = false;
+  const originals = new Map(), prepared = new WeakMap(), captured = new WeakMap();
   const refuse = reason => {
     try { onDiagnostic?.(reason); } catch {}
     return false;
@@ -30,7 +30,7 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
   function invalidate(reason = 'clock') {
     if (!epoch && !source && !pending) return;
     const attempt = pending; pending = undefined;
-    epoch = undefined; originals.clear(); anchor = undefined; activation = undefined; ingress = undefined; last = undefined;
+    epoch = undefined; originals.clear(); anchor = undefined; activation = undefined; ingress = undefined; observedIngress = undefined; last = undefined; lastClockMs = undefined;
     attempt?.controller.abort();
     const retired = source; source = undefined;
     try { retired?.dispose(); } catch {}
@@ -54,8 +54,18 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
   }
   const ms = (record) => Number(record.loNS / 1000000n);
   const clock = Object.freeze({ id: policy.sourceKind ?? (policy.rawKind === 'linux-boottime' ? 'linux-proc-boottime' : policy.rawKind), now() {
-    if (ingress) { const original = ingress; ingress = undefined; last = original; return ms(original); }
-    return ms(sample());
+    // Retain the high-water sample even when the SDK consumes a buffered event.
+    const original = ingress ?? sample(); ingress = undefined;
+    let tick = ms(original);
+    // Checkpoint setup may sample after prefetch. Keep SDK time monotonic
+    // while retaining the actual earlier event ingress as source provenance.
+    if (lastClockMs !== undefined && tick < lastClockMs) {
+      tick = ms(sample());
+      if (tick < lastClockMs) { invalidate(); bad(); }
+    }
+    lastClockMs = tick;
+    observedIngress = { original, tick };
+    return tick;
   } });
   async function activate() {
     if (disposed) return false;
@@ -86,27 +96,40 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
         });
         if (!isCurrent()) { try { acquired?.dispose(); } catch {} bad(); }
         source = acquired; activation = undefined;
-        if (policy.rawKind !== 'linux-boottime' &&
-            !policy.images?.some(image => image.imageSHA256 === source.imageSHA256)) bad();
-        const before = sample();
-        const r = await registry.clock({ signal: attempt.controller.signal, isCurrent, deadline: attempt.deadline });
-        if (!isCurrent() || performance.now() >= attempt.deadline || r.status !== 'ok') bad();
-        const after = sample(), original = clockReceipt(r.output);
-        if (!anchorMatches(original, before, after, policy) || after.loNS - before.loNS > 2000000000n) bad();
-        anchor = original; activation = before;
-        epoch = Object.freeze({ id, started: before.loNS, after: after.hiNS });
-        return true;
+        // A calibration around a fully reaped helper can exceed the fixed
+        // bracket even when it completes inside the activation deadline.
+        // Retry only that case, before accepting any events: every accepted
+        // epoch still uses one complete bracket within the compiled bound.
+        for (let round = 0; round < 3; round++) {
+          const before = sample();
+          const r = await registry.clock({ signal: attempt.controller.signal, isCurrent, deadline: attempt.deadline });
+          if (!isCurrent() || performance.now() >= attempt.deadline || r.status !== 'ok') bad();
+          const after = sample(), original = clockReceipt(r.output);
+          const span = after.hiNS - before.loNS;
+          if (after.loNS - before.loNS > 2000000000n) bad();
+          if (span > policy.translationBoundNS) {
+            // Check every other invariant before retrying. This larger span is
+            // used only to classify refusal; it never becomes a policy or anchor.
+            if (!anchorMatches(original, before, after, { ...policy, translationBoundNS: span })) bad();
+            continue;
+          }
+          if (!anchorMatches(original, before, after, policy)) bad();
+          anchor = original; activation = before;
+          epoch = Object.freeze({ id, started: before.loNS, after: after.hiNS });
+          return true;
+        }
+        bad();
       } catch { if (pending === attempt) invalidate(); return false; }
       finally { clearTimeout(timer); if (pending === attempt) pending = undefined; }
     })();
     return attempt.promise;
   }
-  function retain(record) {
+  function retain(record, handoffTickMs = ms(record)) {
     if (!epoch) bad();
     for (const [tick] of originals) if (record.loNS - tick > 30000000000n) originals.delete(tick);
     // SDK handoffs carry integer milliseconds. Keep the first genuine sample
     // in that bucket and serialize its exact counter, without restamping it.
-    const tick = record.loNS / 1000000n * 1000000n;
+    const tick = BigInt(handoffTickMs) * 1000000n;
     if (!originals.has(tick)) {
       if (originals.size >= 256) { invalidate(); bad(); }
       originals.set(tick, Object.freeze({ sample: record, epoch, anchor }));
@@ -118,9 +141,25 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
         event?.type === 'session.status' && event.properties?.status?.type === 'idle' ||
         event?.type === 'message.updated' && event.properties?.info?.error != null) retain(record);
   }
+  // The token binds one early read to its event and source epoch; it cannot
+  // be reused or moved to a different event after revocation or reconnect.
+  function captureIngress(event) {
+    if (!epoch || !event || typeof event !== 'object') bad();
+    const token = {}; captured.set(token, { event, epoch, record: sample() }); return token;
+  }
+  function armIngress(token, event) {
+    const held = captured.get(token); captured.delete(token);
+    if (!held || held.event !== event || held.epoch !== epoch || !epoch) { invalidate(); bad(); }
+    const now = sample();
+    if (now.loNS - held.record.loNS > 30000000000n) { invalidate(); bad(); }
+    ingress = held.record;
+  }
   function nativeIngress(event) {
-    if (['form.created', 'permission.asked', 'session.execution.succeeded', 'session.execution.failed'].includes(event?.type))
-      retain(last ?? sample());
+    const observed = observedIngress; observedIngress = undefined;
+    if (['form.created', 'permission.asked', 'session.execution.succeeded', 'session.execution.failed'].includes(event?.type)) {
+      if (observed) retain(observed.original, observed.tick);
+      else retain(sample());
+    }
   }
   const current = (record, handoff) => {
     if (disposed || epoch !== record.epoch) return false;
@@ -143,7 +182,8 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
       if (!current(original, handoff)) return refuse('prep.current');
       if (event.rootSession !== true || !event.provenance) return refuse('prep.native');
       diagnosticStage = 'prep.catch.sample';
-      const before = sample(), remaining = handoff.metadataDeadline - clock.now();
+      let before = sample();
+      const remaining = handoff.metadataDeadline - clock.now();
       if (remaining <= 0) return refuse('prep.remaining');
       let after;
       if (completion) {
@@ -152,15 +192,26 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
         after = sample();
         if (!current(original, handoff)) return refuse('prep.current');
       } else {
-        diagnosticStage = 'prep.catch.helper';
-        const response = await registry.clock({ signal: handoff.signal, isCurrent: () => current(original, handoff),
-          deadline: performance.now() + Math.min(remaining, 2000) });
-        if (!current(original, handoff)) return refuse('prep.current_after_helper');
-        if (response.status !== 'ok') return refuse('prep.helper');
-        diagnosticStage = 'prep.catch.calibration';
-        after = sample();
-        const calibrationCheck = clockReceipt(response.output);
-        if (!anchorMatches(calibrationCheck, before, after, policy)) bad();
+        const deadline = performance.now() + Math.min(remaining, 2000);
+        // A helper that is merely slow to spawn and reap on a busy machine can
+        // overrun the fixed bracket while every other invariant holds. Measure
+        // again inside the same deadline (as activation does); an accepted
+        // calibration still passes the unchanged bound. Any other mismatch, or a
+        // third round that is still too slow, retires authority as before; a
+        // deadline, abort or busy registry refuses this event only.
+        for (let round = 0; ; round++) {
+          if (round > 0) { diagnosticStage = 'prep.catch.sample'; before = sample(); }
+          diagnosticStage = 'prep.catch.helper';
+          const response = await registry.clock({ signal: handoff.signal, isCurrent: () => current(original, handoff), deadline });
+          if (!current(original, handoff)) return refuse('prep.current_after_helper');
+          if (response.status !== 'ok') return refuse('prep.helper');
+          diagnosticStage = 'prep.catch.calibration';
+          after = sample();
+          const calibrationCheck = clockReceipt(response.output);
+          if (anchorMatches(calibrationCheck, before, after, policy)) break;
+          if (round >= 2 || !anchorMatches(calibrationCheck, before, after,
+            { ...policy, translationBoundNS: after.hiNS - before.loNS })) bad();
+        }
       }
       if (!overlaps(original.sample, after, policy.comparisonBoundNS) || after.loNS - before.loNS > 2000000000n) bad();
       // Keep the genuine PRE-ACTIVATION anchor; no completion restamping.
@@ -209,7 +260,7 @@ export function createPreparedDelivery({ registry, origin, policy, isOwned, onIn
       },
     });
   }
-  return Object.freeze({ clock, activate, beginIngress, nativeIngress, beforeEmit, emit, invalidate,
+  return Object.freeze({ clock, activate, beginIngress, captureIngress, armIngress, nativeIngress, beforeEmit, emit, invalidate,
     allowsBirth(nativeTime) {
       return epoch && Number.isSafeInteger(nativeTime) && nativeTime > 0 &&
         BigInt(nativeTime) * 1000000n >= activation.wallNS + (epoch.after - activation.loNS);

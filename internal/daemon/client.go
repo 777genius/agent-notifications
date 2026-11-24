@@ -7,17 +7,27 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
+
+// ErrStrictUnsupported confirms an old daemon rejected the unknown type
+// before submitting any notification. Other failures remain uncertain.
+var ErrStrictUnsupported = errors.New("strict notification unsupported")
+
+// ErrNoFocusProbeFailed means no Notify request was submitted because the
+// no-focus capability check failed; a plain fallback cannot duplicate it.
+var ErrNoFocusProbeFailed = errors.New("no-focus capability probe failed")
 
 // Client communicates with the daemon via Unix socket
 type Client struct {
@@ -52,6 +62,31 @@ func (c *Client) SendNotification(
 // SendNotificationContext uses the same daemon protocol and retains the caller's
 // deadline through dial, write and read. It is the existing focus-on protocol.
 func (c *Client) SendNotificationContext(ctx context.Context, title, body, appIcon string, hints FocusHints, timeout int) (*NotifyResponse, error) {
+	return c.SendNotificationWithOptionsContext(ctx, title, body, appIcon, hints, timeout, NotifyOptions{})
+}
+
+// NotifyOptions are per-request delivery options that are not focus hints.
+type NotifyOptions struct {
+	// ReplaceKey is the session id whose previous notification this one
+	// replaces. Empty keeps the notification unique.
+	ReplaceKey string
+	// NoFocus sends the notification without a click action.
+	NoFocus bool
+}
+
+// SendNotificationWithOptionsContext is SendNotificationContext with
+// replacement and focus options.
+func (c *Client) SendNotificationWithOptionsContext(ctx context.Context, title, body, appIcon string, hints FocusHints, timeout int, opts NotifyOptions) (*NotifyResponse, error) {
+	if opts.NoFocus {
+		// An older daemon ignores NoFocus and would add a click action.
+		ping, err := c.pingContext(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrNoFocusProbeFailed, err)
+		}
+		if ping == nil || !slices.Contains(ping.Capabilities, CapabilityNoFocus) {
+			return nil, ErrNoFocusUnsupported
+		}
+	}
 	req := Request{
 		Type:    MessageTypeNotify,
 		Version: ProtocolVersion,
@@ -68,12 +103,21 @@ func (c *Client) SendNotificationContext(ctx context.Context, title, body, appIc
 			FocusWezTermPaneID: hints.WezTermPaneID,
 			FocusWezTermSocket: hints.WezTermSocket,
 			FocusWarpURL:       hints.WarpFocusURL,
+			FocusSwaySocket:    hints.SwaySocket,
+			FocusAncestorPIDs:  hints.AncestorPIDs,
 			FocusZellijSession: hints.ZellijSession,
 			FocusZellijPaneID:  hints.ZellijPaneID,
 			FocusZellijTabName: hints.ZellijTabName,
 			FocusZellijMode:    hints.ZellijMode,
 			Timeout:            timeout,
+			Strict:             hints.Strict,
+			StrictSound:        hints.StrictSound,
+			ReplaceKey:         opts.ReplaceKey,
+			NoFocus:            opts.NoFocus,
 		},
+	}
+	if hints.Strict != nil {
+		req.Type = MessageTypeNotifyStrict
 	}
 
 	resp, err := c.sendContext(ctx, req)
@@ -82,6 +126,9 @@ func (c *Client) SendNotificationContext(ctx context.Context, title, body, appIc
 	}
 
 	if resp.Error != "" {
+		if req.Type == MessageTypeNotifyStrict && resp.Error == "unknown message type" {
+			return nil, ErrStrictUnsupported
+		}
 		return nil, fmt.Errorf("daemon error: %s", resp.Error)
 	}
 
