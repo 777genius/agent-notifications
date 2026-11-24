@@ -37,6 +37,7 @@ type NotificationsConfig struct {
 	NotifyOnSubagentStop                        bool             `json:"notifyOnSubagentStop"`           // Send notifications when subagents (Task tool) complete, default: false. Requires suppressForSubagents=false to take effect.
 	SuppressForSubagents                        *bool            `json:"suppressForSubagents"`           // Suppress subagent (SubagentStop) notifications, and Stop notifications whose transcript_path is a subagent/teammate transcript; default: true. Overrides notifyOnSubagentStop.
 	NotifyOnTextResponse                        *bool            `json:"notifyOnTextResponse"`           // Send notifications for text-only responses (no tools), default: true
+	NotifyOnAgentInitiatedTurns                 *bool            `json:"notifyOnAgentInitiatedTurns"`    // Claude Code: send task/review completion notifications for turns not started by typed user input (subagent results, teammate and cross-session messages), default: true
 	RespectJudgeMode                            *bool            `json:"respectJudgeMode"`               // Honor CLAUDE_HOOK_JUDGE_MODE=true env var to suppress notifications, default: true
 	SuppressFilters                             []SuppressFilter `json:"suppressFilters,omitempty"`      // Rules for suppressing notifications by status/branch/folder
 	TeamMode                                    string           `json:"teamMode,omitempty"`             // Team mode: "always" (no suppression, default), "wait-all" (suppress lead, notify when all idle), "never" (silent in team mode)
@@ -44,7 +45,7 @@ type NotificationsConfig struct {
 	NotifyDelaySeconds                          *int             `json:"notifyDelaySeconds"`             // Wait N seconds before delivering a desktop notification (paired with notifyOnlyWhenUnfocused, it re-checks focus after the wait), default: 0
 	RespectDoNotDisturb                         *string          `json:"respectDoNotDisturb,omitempty"`  // How to treat the desktop's Do Not Disturb state: "off" (default), "silent" (deliver the banner, skip the sound), "suppress" (skip the notification entirely)
 	RespectDisplaySleep                         *bool            `json:"respectDisplaySleep"`            // Skip the plugin's own sound while every display is asleep (macOS only), default: false
-	ReplaceNotificationsPerSession              *bool            `json:"replaceNotificationsPerSession"` // macOS: replace a session's previous banner with its newest desktop notification instead of stacking, default: false
+	ReplaceNotificationsPerSession              *bool            `json:"replaceNotificationsPerSession"` // macOS and Linux: replace a session's previous banner with its newest desktop notification instead of stacking, default: false
 }
 
 // DesktopConfig represents desktop notification settings
@@ -59,6 +60,9 @@ type DesktopConfig struct {
 	ClickToFocus                bool    `json:"clickToFocus"`
 	TerminalClickConsentVersion *int    `json:"terminalClickConsentVersion,omitempty"` // Fresh opt-in for Qoder/Gemini/Cursor
 	ShowSessionLabel            *bool   `json:"showSessionLabel"`
+	TitleTemplate               *string `json:"titleTemplate,omitempty"`  // Optional headline template; see docs/CONFIGURATION.md
+	HeaderTemplate              *string `json:"headerTemplate,omitempty"` // Optional context-line template (macOS subtitle, first body line elsewhere)
+	BodyTemplate                *string `json:"bodyTemplate,omitempty"`   // Optional body template; {header} places the context line
 	TerminalBundleID            string  `json:"terminalBundleId"`
 	ZellijFocus                 string  `json:"zellijFocus,omitempty"`
 }
@@ -118,6 +122,11 @@ type StatusInfo struct {
 	Webhook *StatusChannelConfig `json:"webhook,omitempty"`
 	Title   string               `json:"title"`
 	Sound   string               `json:"sound"`
+
+	// Per-status desktop template overrides; nil inherits notifications.desktop.
+	TitleTemplate  *string `json:"titleTemplate,omitempty"`
+	HeaderTemplate *string `json:"headerTemplate,omitempty"`
+	BodyTemplate   *string `json:"bodyTemplate,omitempty"`
 }
 
 // SuppressFilter defines conditions for suppressing notifications.

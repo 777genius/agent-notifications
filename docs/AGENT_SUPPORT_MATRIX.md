@@ -29,12 +29,14 @@ Sources: [Claude/Codex/Qoder product event boundary](../internal/hooks/event.go)
 | Claude Code | Yes | Yes | Yes | Supported, OS/terminal-dependent; pane precision varies | Not established |
 | Codex CLI | Yes | Yes | Yes | Legacy terminal focus where supported | Separate verified, configured Codex-desktop navigation path; platform/installation qualification matters |
 | OpenCode | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | No: `Navigation=None` | No |
-| Gemini CLI | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | **Guarded opt-in local Linux/X11 window**; authenticated Gemini-to-click E2E not yet qualified | No |
+| Gemini CLI | Yes | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | **Guarded opt-in local Linux/X11 window**; [local-provider CLI-to-click test](gemini-notifications.md#automated-linux-desktop-e2e); authenticated Gemini-to-click E2E not yet qualified | No |
 | Cursor CLI | Yes (qualified hosts only) | Yes | Opt-in OS-default `systemSound` cue since v1.50.0 | **Guarded opt-in local Linux/X11 window** on eligible hosts; authenticated Cursor-to-click E2E not yet qualified | No |
 | Qoder CLI | Yes | Yes | Configured cues; five MP3s bundled, native audible proof pending (issue #562) | **Guarded opt-in local Linux/X11 window**; authenticated Qoder-to-click E2E not yet qualified | No |
 | Pi | Local TUI only | Yes, explicit consent | Yes, configured local TUI | Originating terminal; Linux desktop suite, owner-observed Mac banner/click; full macOS/Windows native acceptance pending | No |
 
 “Desktop” means an implemented submission path, not visible UI acceptance on every OS. **Guarded** means the code can offer a window-focus action only with per-agent schema-2 consent and a verified local X11 terminal origin; **qualified** additionally requires the genuine installed agent's authenticated event → banner → click → correct window evidence. PR [#629](https://github.com/777genius/agent-notifications/pull/629) verified the shared strict daemon with Xvfb/dunst/Xterm and a synthetic `xdotool` click using an isolated Go sender, **not** three authenticated CLI turns. Unverified origins, Wayland, remote/headless and macOS/Windows have informational notifications only for these three agents. [Detailed consent and focus rules](CLICK_TO_FOCUS.md#guarded-local-cli-routing-qoder-gemini-cli-cursor-cli).
+
+The separate [Gemini Linux desktop suite](gemini-notifications.md#automated-linux-desktop-e2e) exercises the actual installed CLI and production hooks with a local model provider. Its scope is an `AfterAgent` completion banner and an automated X11 click, including disabled focus, policy revocation and a closed originating window. It does not qualify Google authentication, Qoder/Cursor CLI turns, audible cues or other desktop platforms.
 
 Pi's process/lifecycle suite uses 27 cases per OS on Linux, macOS and Windows
 with isolated TEST profiles. This scope does not establish full native

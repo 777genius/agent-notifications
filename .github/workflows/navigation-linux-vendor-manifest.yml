@@ -1,6 +1,7 @@
 name: Navigation Linux official client tree manifest TEST
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'scripts/navigation-linux-vendor-manifest.py'
       - '.github/workflows/navigation-linux-vendor-manifest.yml'
@@ -20,6 +21,7 @@ concurrency:
 
 jobs:
   manifest:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     runs-on: ubuntu-24.04
     timeout-minutes: 18
     env:

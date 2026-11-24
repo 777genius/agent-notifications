@@ -92,7 +92,7 @@ func openRoot(path string) (*os.File, error) {
 	return os.NewFile(uintptr(h), path), nil
 }
 
-func openFile(dir *os.File, name string, flags int) (*os.File, error) {
+func openFile(dir *os.File, name string, flags int, allowSnapshotDelete ...bool) (*os.File, error) {
 	acc := flags & 0x3
 	access := uint32(windows.FILE_GENERIC_READ)
 	switch acc {
@@ -116,7 +116,12 @@ func openFile(dir *os.File, name string, flags int) (*os.File, error) {
 		share = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE
 		access |= windows.FILE_GENERIC_READ | windows.FILE_GENERIC_WRITE
 	}
-	h, err := journalOpenAt(windows.Handle(dir.Fd()), name, access, disposition, windows.FILE_NON_DIRECTORY_FILE, share == windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE)
+	// The lock-free *inspection* path must not block the journal writer's
+	// atomic snapshot replacement. Other readers retain existing share modes.
+	shareDelete := len(allowSnapshotDelete) != 0 && allowSnapshotDelete[0] &&
+		name == "journal.json" && acc == oRDONLY && !create
+	h, err := journalOpenAt(windows.Handle(dir.Fd()), name, access, disposition,
+		windows.FILE_NON_DIRECTORY_FILE, share == windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, shareDelete)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", name, err)
 	}
@@ -199,8 +204,8 @@ func lock(ctx context.Context, dir *os.File, create bool) (*os.File, error) {
 	return f, nil
 }
 
-func readBounded(dir *os.File, name string, max int) ([]byte, error) {
-	f, e := openFile(dir, name, oRDONLY)
+func readBounded(dir *os.File, name string, max int, allowSnapshotDelete ...bool) ([]byte, error) {
+	f, e := openFile(dir, name, oRDONLY, allowSnapshotDelete...)
 	if e != nil {
 		return nil, wrap(e)
 	}
@@ -223,6 +228,14 @@ func readBounded(dir *os.File, name string, max int) ([]byte, error) {
 }
 
 func (s *Store) read(dir *os.File) (*disk, error) {
+	return s.readWithSnapshotShare(dir, false)
+}
+
+func (s *Store) readInspection(dir *os.File) (*disk, error) {
+	return s.readWithSnapshotShare(dir, true)
+}
+
+func (s *Store) readWithSnapshotShare(dir *os.File, allowSnapshotDelete bool) (*disk, error) {
 	ns, e := readBounded(dir, "namespace", 65)
 	if e != nil {
 		return nil, e
@@ -230,7 +243,7 @@ func (s *Store) read(dir *os.File) (*disk, error) {
 	if len(ns) != 65 || ns[64] != '\n' || !isHex(string(ns[:64])) {
 		return nil, ErrRepair
 	}
-	b, e := readBounded(dir, "journal.json", s.limits.Bytes)
+	b, e := readBounded(dir, "journal.json", s.limits.Bytes, allowSnapshotDelete)
 	if e != nil {
 		return nil, e
 	}
@@ -477,14 +490,23 @@ func renameAt(dir *os.File, from, to string, replace bool) error {
 	offset := unsafe.Offsetof(renameInfo{}.Name)
 	buffer := make([]byte, int(offset)+len(encoded)*2)
 	info := (*renameInfo)(unsafe.Pointer(&buffer[0]))
+	// The ordinary FileRenameInformation replacement can reject an open
+	// destination even when the inspector granted FILE_SHARE_DELETE. Use
+	// the same native POSIX replacement contract as sharedstate's writer,
+	// so the immutable old snapshot remains readable and new readers see
+	// the published snapshot. Unsupported filesystems fail closed.
+	// https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information
+	infoClass := uint32(windows.FileRenameInformation)
 	if replace {
-		info.Replace = windows.FILE_RENAME_REPLACE_IF_EXISTS
+		info.Replace = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
+		const fileRenameInformationEx uint32 = 65
+		infoClass = fileRenameInformationEx
 	}
 	info.Root = windows.Handle(dir.Fd())
 	info.Length = uint32(len(encoded) * 2)
 	copy(unsafe.Slice((*uint16)(unsafe.Pointer(&buffer[offset])), len(encoded)), encoded)
 	var status windows.IO_STATUS_BLOCK
-	err = windows.NtSetInformationFile(h, &status, &buffer[0], uint32(len(buffer)), windows.FileRenameInformation)
+	err = windows.NtSetInformationFile(h, &status, &buffer[0], uint32(len(buffer)), infoClass)
 	if err != nil {
 		if nt, ok := err.(windows.NTStatus); ok {
 			return nt.Errno()
@@ -494,7 +516,7 @@ func renameAt(dir *os.File, from, to string, replace bool) error {
 	return nil
 }
 
-func journalOpenAt(parent windows.Handle, name string, access, disposition, options uint32, shareWrite bool) (windows.Handle, error) {
+func journalOpenAt(parent windows.Handle, name string, access, disposition, options uint32, shareWrite bool, shareDelete ...bool) (windows.Handle, error) {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
 		return 0, fmt.Errorf("invalid relative Windows component")
 	}
@@ -511,6 +533,9 @@ func journalOpenAt(parent windows.Handle, name string, access, disposition, opti
 		share = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
 	} else if shareWrite {
 		share = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE
+	}
+	if len(shareDelete) != 0 && shareDelete[0] && options&windows.FILE_DIRECTORY_FILE == 0 {
+		share |= windows.FILE_SHARE_DELETE
 	}
 	err = windows.NtCreateFile(&handle, access|windows.SYNCHRONIZE, &attrs, &status, nil, windows.FILE_ATTRIBUTE_NORMAL, share, disposition, options|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT, 0, 0)
 	if err != nil {

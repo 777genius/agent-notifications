@@ -9,6 +9,7 @@ import (
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
 	"github.com/777genius/agent-notifications/internal/config"
+	"github.com/777genius/agent-notifications/internal/desktoptemplate"
 	"github.com/777genius/agent-notifications/internal/errorhandler"
 	"github.com/777genius/agent-notifications/internal/logging"
 	"github.com/777genius/agent-notifications/internal/notifier"
@@ -124,6 +125,9 @@ func (h *Handler) sendNotifications(status analyzer.Status, body, actions, sessi
 				SessionName: label, Branch: gitBranch, Folder: folderName,
 				Body: joined, Question: details[0].question,
 			}))
+		}
+		if templates := h.cfg.DesktopTemplatesFor(statusStr); templates.Any() {
+			opts = append(opts, notifier.WithTemplateData(h.templateData(templates, sessionName, sessionID, gitBranch, folderName, cwd, body, actions, details...)))
 		}
 		// Qoder's legacy notifier may otherwise attach approximate actions.
 		// A trusted local origin is bound only by the managed Qoder composer.
@@ -284,4 +288,28 @@ func (h *Handler) permissionGuidanceStamp() (string, bool) {
 	}
 
 	return stampPath, true
+}
+
+// templateData collects desktop template placeholder values. The repository
+// name costs a git subprocess, so it is looked up only when a template uses it.
+func (h *Handler) templateData(templates config.DesktopTemplates, sessionName, sessionID, branch, folder, cwd, body, actions string, details ...hookNotificationDetails) notifier.TemplateData {
+	data := notifier.TemplateData{
+		SessionID: sessionID, Branch: branch, Folder: folder,
+		Body: body, Actions: actions, Agent: string(h.product),
+	}
+	if sessionName != "unknown" {
+		data.SessionName = sessionName
+	}
+	if len(details) > 0 {
+		data.Question = details[0].question
+		if details[0].title != "" {
+			data.SessionName = details[0].title
+		} else if details[0].templateName != "" {
+			data.SessionName = details[0].templateName
+		}
+	}
+	if templates.References(desktoptemplate.Repo) {
+		data.Repo = h.gitRepo(cwd)
+	}
+	return data
 }

@@ -2,6 +2,7 @@ name: Strict terminal native X11 click E2E
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/strict-terminal-native-linux.yml'
       - 'internal/daemon/**'
@@ -30,6 +31,7 @@ permissions:
 
 jobs:
   strict-terminal:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: Actual X11 product daemon / physical notification click
     runs-on: ubuntu-24.04
     timeout-minutes: 20

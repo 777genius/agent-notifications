@@ -228,6 +228,7 @@ The following JSON illustrates the schema. Do not replace your existing document
     "notifyOnSubagentStop": false,
     "suppressForSubagents": true,
     "notifyOnTextResponse": true,
+    "notifyOnAgentInitiatedTurns": true,
     "respectJudgeMode": true,
     "notifyOnlyWhenUnfocused": false,
     "notifyDelaySeconds": 0,
@@ -298,13 +299,15 @@ hides native and generated names without hiding the question or project.
 | `notifyOnSubagentStop` | `false` | Send notifications when subagents (Task tool) complete. Has no effect unless `suppressForSubagents` is also set to `false`. |
 | `suppressForSubagents` | `true` | Suppress subagent (`SubagentStop`) notifications, plus any `Stop` notification whose transcript is a subagent/teammate transcript. Detection uses the hook event for `SubagentStop` (Claude passes the parent session `transcript_path` to that hook, so a path check alone can't identify it). Set to `false` together with `notifyOnSubagentStop: true` to get a notification each time a subagent finishes. |
 | `notifyOnTextResponse` | `true` | Send notifications for text-only responses (no tool usage) |
+| `notifyOnAgentInitiatedTurns` | `true` | Claude Code only. Send "Completed" and "Review" notifications for turns you did not start by typing, for example a turn started by a subagent result, a teammate message or a cross-session message. Set to `false` to get those notifications only for turns that began with your own input. See [Turns you did not start](#turns-you-did-not-start). |
 | `desktop.showSessionLabel` | `true` | Show the native session name, with `[name id]` as fallback. Questions identify the session in the native macOS subtitle or the body on backends without subtitles. `false` hides both kinds of session label without hiding the actual question. |
+| `desktop.titleTemplate`, `desktop.headerTemplate`, `desktop.bodyTemplate` | not set | Custom title, context line and body. See [Notification templates](#notification-templates). |
 | `respectJudgeMode` | `true` | Honor `CLAUDE_HOOK_JUDGE_MODE=true` env var to suppress notifications |
 | `notifyOnlyWhenUnfocused` | `false` | Skip the desktop notification only when the focused terminal window can be matched to the current Claude session. Best-effort per platform; if focus can't be determined the notification is still shown. |
 | `notifyDelaySeconds` | `0` | Wait N seconds before delivering a desktop notification (configured delay capped at 25s). Claude/Codex hooks skip desktop delivery when the full delay exceeds the remaining host-hook budget. With `notifyOnlyWhenUnfocused`, focus is re-checked after the wait. Webhooks are unaffected. |
 | `respectDoNotDisturb` | `"off"` | Honour the desktop's Do Not Disturb state. `"silent"` still delivers the banner (so it reaches the notification centre) but skips the plugin's sound; `"suppress"` skips the notification entirely. Linux only for now (KDE Plasma, GNOME, XFCE, dunst); other platforms always report "not in DND". Webhooks are unaffected. See [Do Not Disturb](DO_NOT_DISTURB.md). |
 | `respectDisplaySleep` | `false` | Skip the plugin's own sound while every display is asleep; the banner is still delivered. macOS only for now; other platforms always report "not asleep". Independent of `respectDoNotDisturb`. Webhooks are unaffected. |
-| `replaceNotificationsPerSession` | `false` | macOS only. Let a session's newest desktop notification **replace** its previous banner in place instead of stacking a new one. Different sessions never collide. Default `false` keeps every banner so unread alerts are never silently dropped. |
+| `replaceNotificationsPerSession` | `false` | macOS and Linux. Let a session's newest desktop notification **replace** its previous banner in place instead of stacking a new one. Different sessions never collide. Default `false` keeps every banner so unread alerts are never silently dropped. |
 | `suppressQuestionAfterTaskCompleteSeconds` | `12` | Suppress question notifications for N seconds after task complete |
 | `suppressQuestionAfterAnyNotificationSeconds` | `7` | Suppress question notifications for N seconds after any notification |
 | `suppressFilters` | `[]` | Array of rules to suppress notifications by status, git branch, and/or folder. Each rule is an AND of its fields; omitted fields match any value. Set `gitBranch` to `""` to match sessions outside git repos. |
@@ -329,6 +332,104 @@ You can also override individual channels per status:
 `statuses.<name>.enabled` is still the master switch for both channels. Use
 `desktop.enabled` and `webhook.enabled` when you want one channel on and the
 other off for the same status.
+
+### Turns you did not start
+
+In Claude Code, a turn can also start without your input: a background subagent
+finishes and reports its result, a teammate sends a message, or another Claude
+session messages this one. Each of those turns ends with a "Completed"
+notification, even though you did not ask for anything. With
+`"notifyOnAgentInitiatedTurns": false` the plugin sends "Completed" and "Review"
+only for turns that began with your own input.
+
+Claude Code marks each prompt in the transcript with who sent it. The plugin
+looks at the input that started the current turn and treats the turn as yours
+when that input was typed by you. Input that Claude Code adds to a turn while it
+is still running doesn't change who started it. That covers skill instructions,
+compaction summaries and queued notifications. A turn you started still notifies
+when Claude used a skill or the conversation was compacted along the way.
+
+Some notifications are always sent, whoever started the turn: questions,
+plans, permission requests, API errors and session limits. These need your
+attention. In `teamMode: "wait-all"`, the "all teammates finished" notification
+also still goes out, even though the lead's last turn usually starts with a
+teammate message.
+
+Transcripts from Claude Code versions that don't record who sent a prompt keep
+the current behavior, so every turn notifies. This option doesn't affect other
+agents.
+
+### Notification templates
+
+By default the layout is fixed: the title is the status title plus the session
+label, the context line is `branch · folder` (`session · folder` for questions),
+and the body is the summary. Three optional templates replace those parts
+globally, and each status can override any of them:
+
+```json
+{
+  "notifications": {
+    "desktop": {
+      "titleTemplate": "{statusTitle} {repo}",
+      "headerTemplate": "{branch} · {sessionName}",
+      "bodyTemplate": "{header}\n{body}"
+    }
+  },
+  "statuses": {
+    "question": { "titleTemplate": "{statusTitle} {repo}: {question}" }
+  }
+}
+```
+
+| Option | Renders |
+|--------|---------|
+| `desktop.titleTemplate` | The headline. |
+| `desktop.headerTemplate` | The context line: the native subtitle on macOS, the first body line on Linux and Windows. `""` removes it. |
+| `desktop.bodyTemplate` | The body. `{header}` places the context line inside the body; it is then not shown separately. |
+| `statuses.<name>.titleTemplate`, `headerTemplate`, `bodyTemplate` | Per-status overrides of the three templates above. |
+
+A template that is not set keeps the default layout for that part, so with no
+templates the notifications are exactly as before.
+
+| Placeholder | Value |
+|-------------|-------|
+| `{statusTitle}` | `statuses.<name>.title`, for example `✅ Completed` |
+| `{status}` | Status key, for example `task_complete` |
+| `{sessionName}` | Native session name, or the generated `word-word-NN` label |
+| `{sessionId}` | Host session ID |
+| `{folder}` | Basename of the working directory |
+| `{repo}` | Repository name: the basename of the main working tree, so a linked worktree or a subdirectory still shows the repository |
+| `{branch}` | Current git branch |
+| `{question}` | Question text, for question notifications |
+| `{body}` | Summary text, without the action summary |
+| `{actions}` | Action summary, for example `📝 1 new  ▶ 2 cmds  ⏱ 41s` |
+| `{agent}` | `claude`, `codex`, `qoder`, `pi` |
+| `{header}` | The rendered context line (only in `bodyTemplate`) |
+
+Rendering rules:
+
+- An empty placeholder is dropped together with one adjacent separator, so
+  `{branch} · {folder}` outside a git repository renders just the folder.
+  Brackets around placeholders go with them: `{statusTitle} [{sessionName}]`
+  renders just the status title when there is no session name. A bracket
+  pair around several placeholders stays while any of them has a value, so
+  `[{folder} {branch}]` renders `[project]` outside a git repository.
+- The title and the context line are single lines of at most 100 characters,
+  and longer text ends in `…`. A title that renders empty falls back to the
+  default title.
+- An unknown placeholder such as `{sessionID}` is a configuration error, so a
+  typo is reported when the configuration is validated instead of showing up
+  in a notification. Braces that are not a `{name}` placeholder, such as `{ x }`,
+  stay literal. `{header}` is accepted only in `bodyTemplate`.
+- Templates render `{sessionName}` even when `desktop.showSessionLabel` is
+  `false`; that option only affects the default layout.
+- `{repo}` and, for Pi, `{branch}` each run one git command, and only when a
+  template for the notified status uses them.
+
+Templates change presentation only, not which notifications are sent. They
+apply to desktop notifications from Claude Code, Codex, Qoder and Pi hooks; the
+OpenCode plugin and webhooks keep their own formats (for webhooks, use
+`webhook.payloadFields`).
 
 ### Focus-Aware & Delayed Notifications
 
@@ -421,12 +522,13 @@ This is a different signal from Do Not Disturb - a display can go to sleep
 without Focus/DND being on, and DND can be on with the display wide awake - so
 the two options are independent and compose freely.
 
-### Replace Per-Session Banners (macOS)
+### Replace Per-Session Banners (macOS, Linux)
 
 By default every desktop notification carries a unique identifier, so banners stack and nothing is ever lost - a session that finishes several tasks (or, for Codex, crosses the sandbox boundary repeatedly in "Approve for me" mode) produces one banner per event.
 
 On macOS `terminal-notifier -group` is the `UNNotificationRequest.identifier`: delivering a request that reuses a value replaces the previous banner in place. Setting `replaceNotificationsPerSession: true` keys that identifier on the Claude/Codex session id, so a session's newest banner replaces its own previous banner while other sessions stay untouched.
 
+On Linux the option uses the freedesktop Notifications `replaces_id`. The background notification daemon (the same one that handles click-to-focus) remembers the id of each session's live notification and passes it as `replaces_id` on that session's next one, so the notification server updates the banner in place. With `desktop.clickToFocus: false` the daemon is still used for these notifications, but they get no click action.
 ```json
 {
   "notifications": {
@@ -438,6 +540,7 @@ On macOS `terminal-notifier -group` is the `UNNotificationRequest.identifier`: d
 - Conversation grouping in Notification Center is unchanged - it stays on the session thread (`-threadID`).
 - Notifications with no session id (or `unknown`) always stay unique, so unrelated alerts are never collapsed.
 - Trade-off: a replaced banner disappears from Notification Center, so earlier alerts from that session are no longer visible. Leave it off (the default) if you step away and need to catch up on every alert.
+- Linux: the ids live only in the daemon's memory. After the daemon restarts (it exits after 5 minutes without notifications) or once a session's notification is closed, that session's next notification is a new one. If the daemon cannot be started, or an older daemon from before this option worked on Linux is still running, notifications are still delivered, without replacement. With `clickToFocus: true` an older daemon simply stacks them; with `clickToFocus: false` the hook does not use it, so no click action appears. An older daemon exits after 5 minutes without notifications.
 
 ### Sound Options
 

@@ -108,10 +108,7 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 		return fmt.Errorf("unknown status: %s", status)
 	}
 
-	presentation := legacyPresentation(status, message, statusInfo.Title, n.cfg.IsSessionLabelEnabled())
-	if sendOpts.hookPresentation != nil {
-		presentation = hookPresentation(status, *sendOpts.hookPresentation, statusInfo.Title, n.cfg.IsSessionLabelEnabled())
-	}
+	presentation, structuredSubtitle := n.desktopPresentation(status, message, statusInfo.Title, sendOpts)
 	title, cleanMessage, subtitle := presentation.Title, presentation.Body, presentation.Subtitle
 
 	// Get app icon path if configured
@@ -125,7 +122,7 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 	// installed CLI composer, never from a notification body or session ID.
 	if sendOpts.terminal != nil {
 		if focusEnabled && platform.IsLinux() {
-			if sendOpts.hookPresentation != nil && subtitle != "" {
+			if structuredSubtitle && subtitle != "" {
 				cleanMessage = subtitle + "\n" + cleanMessage
 			}
 			return n.sendVerifiedTerminal(title, cleanMessage, appIcon, statusInfo.Sound, sendOpts)
@@ -175,13 +172,15 @@ func (n *Notifier) SendDesktop(status analyzer.Status, message, sessionID, cwd s
 	// The remaining backends only display title and body. Structured hooks
 	// carry question identity in the subtitle, so preserve that literal context
 	// here after the native macOS path has had its clean three-field layout.
-	if sendOpts.hookPresentation != nil && subtitle != "" {
+	if structuredSubtitle && subtitle != "" {
 		cleanMessage = subtitle + "\n" + cleanMessage
 	}
 
-	// Linux: Try daemon for click-to-focus support
-	if platform.IsLinux() && focusEnabled {
-		if err := sendLinuxNotification(title, cleanMessage, appIcon, n.cfg, cwd); err != nil {
+	// Linux: Try daemon for click-to-focus support and for replacing a
+	// session's previous notification (replaceNotificationsPerSession).
+	replaceKey := replacementSessionKey(sessionID, n.cfg.ShouldReplaceNotificationsPerSession())
+	if platform.IsLinux() && (focusEnabled || replaceKey != "") {
+		if err := sendLinuxNotification(title, cleanMessage, appIcon, n.cfg, cwd, focusEnabled, replaceKey); err != nil {
 			logging.Warn("Linux daemon notification failed, falling back to beeep: %v", err)
 			// Fall through to beeep
 		} else {
