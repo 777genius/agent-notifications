@@ -77,13 +77,13 @@ func inspectInitializedForEnable(ctx context.Context, o Options, s installruntim
 		return fail("initialization_recovery_required",
 			fmt.Errorf("enabled installation has an unfinished setup ownership marker"))
 	}
-	return inspectProvisionContinuation(ctx, o, s, owner)
+	return inspectProvisionContinuation(ctx, o, owner)
 }
 
 // A complete interrupted journal is resumable by Apply. Preflight must not
 // block a legitimate retry after journal_initialized or ownership_ready, nor
 // claim readiness for an abandoned pre-initialization stage (#585).
-func inspectProvisionContinuation(ctx context.Context, o Options, s installruntime.PolicySnapshot, owner ownership) error {
+func inspectProvisionContinuation(ctx context.Context, o Options, owner ownership) error {
 	root := o.ControlRoot
 	state := filepath.Join(root, "state")
 	stage := filepath.Join(root, stageName)
@@ -100,8 +100,11 @@ func inspectProvisionContinuation(ctx context.Context, o Options, s installrunti
 			return fail("initialization_recovery_required",
 				fmt.Errorf("unexpected retained or overlapping setup stage; preserve state"))
 		}
-		if err := checkProvisioned(o, s); err != nil {
-			return err
+		// Do not open the snapshot through the commit-time structural check:
+		// the canonical read-only journal reader handles concurrent replacement.
+		if err := inspectPersistedStateIdentity(root, "state", owner.DirectoryID); err != nil {
+			return fail("initialization_recovery_required",
+				fmt.Errorf("state is not the durably owned directory: %w", err))
 		}
 		return inspectInitializedJournal(ctx, o, state, owner.Namespace)
 	}
@@ -112,7 +115,7 @@ func inspectProvisionContinuation(ctx context.Context, o Options, s installrunti
 	// Use the same persisted-directory identity authority as provision.
 	// On Darwin a remount may renumber the device; comparing serialized
 	// strings directly would refuse a legitimate interrupted setup.
-	if err := inspectPersistedStageIdentity(root, owner.DirectoryID); err != nil {
+	if err := inspectPersistedStateIdentity(root, stageName, owner.DirectoryID); err != nil {
 		return fail("initialization_recovery_required",
 			fmt.Errorf("provisioning stage is not the durably owned directory: %w", err))
 	}

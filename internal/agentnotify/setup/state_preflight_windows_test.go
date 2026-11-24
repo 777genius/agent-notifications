@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"golang.org/x/sys/windows"
 )
 
 func TestWindowsInspectChecksInitializationBeforeEnable(t *testing.T) {
@@ -66,4 +67,43 @@ func TestWindowsInspectChecksInitializationBeforeEnable(t *testing.T) {
 			t.Fatal("preflight created or adopted unowned state:", err)
 		}
 	})
+}
+
+func TestWindowsInspectCoexistsWithOpenJournalAndSpoolHandles(t *testing.T) {
+	o, req := windowsNoneFixture(t)
+	global, err := os.ReadFile(o.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Apply(windowsContext(t), o, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ExpectedGeneration = result.Generation
+
+	for _, tc := range []struct {
+		name   string
+		path   string
+		access uint32
+		share  uint32
+	}{
+		{"journal lock", filepath.Join("journal", "lock"), windows.GENERIC_READ | windows.GENERIC_WRITE, windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE},
+		{"spool lock", filepath.Join("native-spool", ".spool.lock"), windows.GENERIC_READ | windows.GENERIC_WRITE, windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE},
+		{"snapshot delete access", filepath.Join("journal", "journal.json"), windows.DELETE | windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ | windows.FILE_SHARE_DELETE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path, err := windows.UTF16PtrFromString(filepath.Join(o.ControlRoot, "state", tc.path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			h, err := windows.CreateFile(path, tc.access, tc.share, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = windows.CloseHandle(h) }()
+			if err := Inspect(windowsContext(t), o, req, global); err != nil {
+				t.Fatalf("read-only preflight refused healthy state with an open consumer handle: %v", err)
+			}
+		})
+	}
 }

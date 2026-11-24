@@ -5,23 +5,23 @@ package setup
 // Use the same descriptor-relative, persisted-directory identity check as the
 // setup transaction. Darwin may renumber the device after remount/reboot,
 // but the parent device and persisted inode must still match.
-func inspectPersistedStageIdentity(rootPath, expected string) error {
+func inspectPersistedStateIdentity(rootPath, name, expected string) error {
 	root, err := openRoot(rootPath)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = root.Close() }()
-	stage, err := openChild(root, stageName)
+	state, err := openChild(root, name)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = stage.Close() }()
-	if err := matches(stage, root, expected); err != nil {
+	defer func() { _ = state.Close() }()
+	if err := matches(state, root, expected); err != nil {
 		return err
 	}
 	// Exact private directories and permanent spool lock must satisfy the
 	// same descriptor-relative checks that Apply uses when resuming.
-	journalDir, err := openChild(stage, "journal")
+	journalDir, err := openChild(state, "journal")
 	if err != nil {
 		return err
 	}
@@ -36,7 +36,7 @@ func inspectPersistedStageIdentity(rootPath, expected string) error {
 	if lockErr != nil {
 		return lockErr
 	}
-	spool, err := openChild(stage, "native-spool")
+	spool, err := openChild(state, "native-spool")
 	if err != nil {
 		return err
 	}
