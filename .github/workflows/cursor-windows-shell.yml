@@ -60,6 +60,7 @@ jobs:
           New-Item -ItemType Directory -Path $stage | Out-Null
           $binary = Join-Path $stage 'claude-notifications-windows-amd64.exe'
           go test ./internal/cursorinstall -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go test ./internal/cursorsource -run '^TestQualifiedWindowsPowerShellBOM$' -count=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go test ./internal/desktopinstall -run '^TestWindowsPortableShortcutNonSharingPrimary$' -count=1
@@ -96,7 +97,48 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          go test ./cmd/claude-notifications -run '^TestWindowsCursorInstalledDiagnosis$' -count=1 -v 2>&1 | Tee-Object (Join-Path $env:CURSOR_TEST_ROOT 'installed-diagnosis.stdout')
+          # The dual-channel step uses a separate TEST root. Its local environment
+          # does not persist to this step; the first successful fixture is already uninstalled.
+          if ($env:CURSOR_TEST_BOTH_ROOT) { $env:CURSOR_TEST_ROOT = $env:CURSOR_TEST_BOTH_ROOT }
+          go test ./cmd/claude-notifications -run '^TestWindowsCursorInstalledDiagnosis
+      - name: Restore disposable CI audit settings even after TEST failure
+        if: always() && env.CURSOR_TEST_ROOT != ''
+        shell: pwsh
+        run: |
+          & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/integration/cursor_windows_toast_watch.ps1 -RestoreOnly
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:CURSOR_TEST_BOTH_ROOT) {
+            $env:CURSOR_TEST_ROOT = $env:CURSOR_TEST_BOTH_ROOT
+            & "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/integration/cursor_windows_toast_watch.ps1 -RestoreOnly
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Retain native qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cursor-windows-native-shell
+          path: |
+            ${{ env.CURSOR_TEST_ROOT }}/native-shell-result.json
+            ${{ env.CURSOR_TEST_ROOT }}/native-stop.json
+            ${{ env.CURSOR_TEST_ROOT }}/native-argv.json
+            ${{ env.CURSOR_TEST_ROOT }}/cli-stdout.txt
+            ${{ env.CURSOR_TEST_ROOT }}/cli-stderr.txt
+            ${{ env.CURSOR_TEST_ROOT }}/archive-sha256.txt
+            ${{ env.CURSOR_TEST_ROOT }}/installed-result.json
+            ${{ env.CURSOR_TEST_ROOT }}/toast-processes.json
+            ${{ env.CURSOR_TEST_ROOT }}/toast-watch-startup
+            ${{ env.CURSOR_TEST_ROOT }}/TEST-audit-restored
+            ${{ env.CURSOR_TEST_ROOT }}/*.stdout
+            ${{ env.CURSOR_TEST_ROOT }}/*.stderr
+            ${{ env.CURSOR_TEST_BOTH_ROOT }}/native-shell-result.json
+            ${{ env.CURSOR_TEST_BOTH_ROOT }}/installed-result.json
+            ${{ env.CURSOR_TEST_BOTH_ROOT }}/toast-processes.json
+            ${{ env.CURSOR_TEST_BOTH_ROOT }}/TEST-audit-restored
+            ${{ env.CURSOR_TEST_BOTH_ROOT }}/*.stdout
+            ${{ env.CURSOR_TEST_BOTH_ROOT }}/*.stderr
+          if-no-files-found: warn
+ -count=1 -v 2>&1 | Tee-Object (Join-Path $env:CURSOR_TEST_ROOT 'installed-diagnosis.stdout')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Restore disposable CI audit settings even after TEST failure
         if: always() && env.CURSOR_TEST_ROOT != ''
         shell: pwsh
