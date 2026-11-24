@@ -121,6 +121,7 @@ def run(args, root, tag):
     native = load('opencode-semantic-e2e')
     binary = root / ('opencode.exe' if sys.platform == 'win32' else 'opencode')
     h.extract_official_binary(archive, binary)
+    print(f'range-stage: official executable bytes={binary.stat().st_size}', flush=True)
     names = dict(home='home', config='config', project='TEST-project', data='data', cache='cache',
                  state='state', runtime='runtime', temp='temp', bun='bun')
     paths = {k: root / v for k, v in names.items()}
