@@ -13,6 +13,7 @@ type sendOptions struct {
 	muteSound                 bool
 	noFocus                   bool
 	hookPresentation          *HookPresentation
+	templateData              *TemplateData
 	executionContext          context.Context
 	runtimeRoot, nativeHelper string
 	terminal                  *notification.TerminalTarget
