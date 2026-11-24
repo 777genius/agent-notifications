@@ -715,16 +715,14 @@ if os.name != 'nt':
             (case/'bin').mkdir(); (case/'tmp space').mkdir()
             slow_curl = curl_stub.replace('# Return a failure AFTER emitting valid bytes, to catch accidental execution.', '''
 if [ "$kind" = bootstrap ]; then
-    # This fake transport owns a sleep child; real curl blocks within its own
-    # process. Clean up the fake child when the loader cancels the transport.
-    delay_pid=""
-    trap '[ -z "$delay_pid" ] || { kill "$delay_pid" 2>/dev/null || true; wait "$delay_pid" 2>/dev/null || true; }' EXIT
-    trap 'exit 143' TERM
-    sleep "${TEST_LOADER_DELAY:-0.35}" &
-    delay_pid=$!
-    wait "$delay_pid"
-    delay_pid=""
-    trap - EXIT TERM
+    # In the cancellation case behave like real curl: a single blocking
+    # transport process. A shell spawning a sleep child has a signal window
+    # before $! is recorded, which can leave an unrelated child holding stdout.
+    if [ "${TEST_LOADER_CANCEL:-0}" = 1 ]; then
+        : > "$CASE_DIR/transport-ready"
+        exec sleep 60
+    fi
+    sleep 0.35
     echo 'warning: TEST delayed download diagnostic' >&2
 fi
 # Return failure after emitting bytes.''')
@@ -735,7 +733,7 @@ fi
             env = dict(os.environ, PATH=runtime_path(case), CASE_DIR=bash_path(case),
                        TMPDIR=bash_path(case/'tmp space'), TERM='xterm-256color',
                        FAIL_DOWNLOAD='bootstrap' if failed else '',
-                       TEST_LOADER_DELAY='5' if cancelled else '0.35')
+                       TEST_LOADER_CANCEL='1' if cancelled else '0')
             env.pop('NO_COLOR', None)
             if name == 'renderer-startup':
                 # A short transport can finish before its renderer runs the first
@@ -764,7 +762,8 @@ trap() {
                         if exc.errno != errno.EIO: raise
             while proc.poll() is None:
                 read_progress()
-                if cancelled and not sent_cancel and b'Downloading pinned bootstrap' in data:
+                if (cancelled and not sent_cancel and b'Downloading pinned bootstrap' in data
+                        and (case/'transport-ready').is_file()):
                     os.killpg(proc.pid, signal.SIGTERM); sent_cancel = True
                 assert time.monotonic() < deadline, (name, 'loader or renderer failed to stop', data)
                 time.sleep(0.01)
