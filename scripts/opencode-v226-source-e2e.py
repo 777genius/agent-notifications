@@ -338,7 +338,11 @@ def extract_official_binary(archive, target):
     else:
         with tarfile.open(archive, mode='r:gz') as packed:
             files = [m for m in packed.getmembers() if Path(m.name).name == 'opencode' and m.isfile()]
-            if len(files) != 1 or not 0 < files[0].size <= 250 * 1024 * 1024:
+            # Standalone Linux archives contain the same compiled CLI as ZIP releases.
+            # Keep a finite uncompressed limit, consistent with the existing ZIP bound.
+            if len(files) != 1 or not 0 < files[0].size <= 350 * 1024 * 1024:
+                print(f'official archive: regular executable count={len(files)}; '
+                      f'size={files[0].size if len(files) == 1 else "unknown"}', file=sys.stderr, flush=True)
                 raise RuntimeError('official_executable_not_unique')
             with packed.extractfile(files[0]) as source, target.open('xb') as dest:
                 while chunk := source.read(1024 * 1024):
