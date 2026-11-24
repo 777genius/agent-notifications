@@ -160,6 +160,7 @@ type Config struct {
 - `GetLastAssistantMessages(messages, count)` - Get recent messages
 - `ExtractTools(messages)` - Extract all tool uses with positions
 - `FindToolPosition(tools, name)` - Find tool by name
+- `TurnOrigin(messages)` - Origin kind (`human`, `task-notification`, `peer`, ...) of the input that started the current turn
 
 ### 4. Analyzer (`internal/analyzer`)
 
@@ -174,6 +175,8 @@ type Config struct {
 5. Last tool in ACTIVE_TOOLS → `task_complete`
 6. Any tool usage (fallback) → `task_complete`
 7. No tools + `notifyOnTextResponse` enabled → `task_complete`
+
+After classification, a Claude `Stop` that would send `task_complete` or `review_complete` is dropped when `notifyOnAgentInitiatedTurns` is `false` and `TurnOrigin` reports that typed input did not start the turn. A `teamMode: "wait-all"` completion claimed by that Stop is exempt.
 
 **Tool Categories**:
 - **ACTIVE**: Write, Edit, Bash, NotebookEdit, SlashCommand, KillShell
