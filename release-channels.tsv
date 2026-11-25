@@ -1,7 +1,7 @@
 # agent-notifications-platform-channels-v1
 # os	arch	tag	release_commit	source_commit	source_ref
-darwin	amd64	v1.51.5	7c589b84c95c9b6e466e64ac9ca3309f522378a2	7c589b84c95c9b6e466e64ac9ca3309f522378a2	release/platform-macos
-darwin	arm64	v1.51.5	7c589b84c95c9b6e466e64ac9ca3309f522378a2	7c589b84c95c9b6e466e64ac9ca3309f522378a2	release/platform-macos
-linux	amd64	v1.51.5	7c589b84c95c9b6e466e64ac9ca3309f522378a2	7c589b84c95c9b6e466e64ac9ca3309f522378a2	release/platform-linux-windows
-linux	arm64	v1.51.5	7c589b84c95c9b6e466e64ac9ca3309f522378a2	7c589b84c95c9b6e466e64ac9ca3309f522378a2	release/platform-linux-windows
-windows	amd64	v1.51.5	7c589b84c95c9b6e466e64ac9ca3309f522378a2	7c589b84c95c9b6e466e64ac9ca3309f522378a2	release/platform-linux-windows
+darwin	amd64	v1.51.5	67796b88f5dcc92b34aad43b7ec65e05b075cf2a	67796b88f5dcc92b34aad43b7ec65e05b075cf2a	release/platform-macos
+darwin	arm64	v1.51.5	67796b88f5dcc92b34aad43b7ec65e05b075cf2a	67796b88f5dcc92b34aad43b7ec65e05b075cf2a	release/platform-macos
+linux	amd64	v1.51.5	67796b88f5dcc92b34aad43b7ec65e05b075cf2a	67796b88f5dcc92b34aad43b7ec65e05b075cf2a	release/platform-linux-windows
+linux	arm64	v1.51.5	67796b88f5dcc92b34aad43b7ec65e05b075cf2a	67796b88f5dcc92b34aad43b7ec65e05b075cf2a	release/platform-linux-windows
+windows	amd64	v1.51.5	67796b88f5dcc92b34aad43b7ec65e05b075cf2a	67796b88f5dcc92b34aad43b7ec65e05b075cf2a	release/platform-linux-windows
