@@ -60,6 +60,7 @@ jobs:
           New-Item -ItemType Directory -Path $stage | Out-Null
           $binary = Join-Path $stage 'claude-notifications-windows-amd64.exe'
           go test ./internal/cursorinstall -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go test ./internal/cursorsource -run '^TestQualifiedWindowsPowerShellBOM$' -count=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go test ./internal/desktopinstall -run '^TestWindowsPortableShortcutNonSharingPrimary$' -count=1
@@ -96,7 +97,11 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
+          # The dual-channel step uses a separate TEST root. Its local environment
+          # does not persist to this step; the first successful fixture is already uninstalled.
+          if ($env:CURSOR_TEST_BOTH_ROOT) { $env:CURSOR_TEST_ROOT = $env:CURSOR_TEST_BOTH_ROOT }
           go test ./cmd/claude-notifications -run '^TestWindowsCursorInstalledDiagnosis$' -count=1 -v 2>&1 | Tee-Object (Join-Path $env:CURSOR_TEST_ROOT 'installed-diagnosis.stdout')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Restore disposable CI audit settings even after TEST failure
         if: always() && env.CURSOR_TEST_ROOT != ''
         shell: pwsh
