@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
@@ -796,7 +797,9 @@ func TestManager_IsDuplicateMessage_EmptyLastMessage(t *testing.T) {
 }
 
 func TestManager_ConsumeInteractiveToolPermissionPair(t *testing.T) {
-	now := platform.CurrentTimestamp()
+	// Each synctest bubble starts at this fixed instant. Keep the exact
+	// cooldown boundary cases independent of filesystem latency and wall time.
+	now := time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC).Unix()
 	for _, tc := range []struct {
 		name     string
 		state    *SessionState
@@ -814,20 +817,22 @@ func TestManager_ConsumeInteractiveToolPermissionPair(t *testing.T) {
 		{"other tool", &SessionState{LastInteractiveTool: "Bash", LastTimestamp: now, PairNotifiedTime: now, LastNotificationTime: now, LastNotificationEvent: "PreToolUse"}, 7, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mgr := newTestManager(t)
-			sessionID := "test-permission-pairing"
-			if tc.state != nil {
-				tc.state.SessionID = sessionID
-				require.NoError(t, mgr.Save(tc.state))
-			}
-			got, err := mgr.ConsumeInteractiveToolPermissionPair(sessionID, tc.cooldown)
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
+			synctest.Test(t, func(t *testing.T) {
+				mgr := newTestManager(t)
+				sessionID := "test-permission-pairing"
+				if tc.state != nil {
+					tc.state.SessionID = sessionID
+					require.NoError(t, mgr.Save(tc.state))
+				}
+				got, err := mgr.ConsumeInteractiveToolPermissionPair(sessionID, tc.cooldown)
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, got)
 
-			// The pairing is single-use: a second prompt never matches.
-			again, err := mgr.ConsumeInteractiveToolPermissionPair(sessionID, tc.cooldown)
-			require.NoError(t, err)
-			assert.False(t, again, "pairing must be consumed")
+				// The pairing is single-use: a second prompt never matches.
+				again, err := mgr.ConsumeInteractiveToolPermissionPair(sessionID, tc.cooldown)
+				require.NoError(t, err)
+				assert.False(t, again, "pairing must be consumed")
+			})
 		})
 	}
 }
