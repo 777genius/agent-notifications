@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,9 +58,53 @@ func TestWindowsCursorInstalledDiagnosis(t *testing.T) {
 		t.Fatal("physical gate", err)
 	}
 	t.Log("physical gate OK", time.Since(started))
-	_, _, err = gate.ConsumerBindingAndConfig(ctx)
+	binding, effective, err := gate.ConsumerBindingAndConfig(ctx)
 	if err != nil {
 		t.Fatal("binding/config", err)
 	}
 	t.Log("binding/config OK", time.Since(started))
+	channels := gate.Channels(ctx, binding)
+	t.Logf("persisted channels desktop=%t webhook=%t status_desktop=%t status_webhook=%t",
+		channels.Desktop, channels.Webhook, effective.IsStatusDesktopEnabled("agent_stopping"), effective.IsStatusWebhookEnabled("agent_stopping"))
+
+	// Claims record attempted channels, not successful effects. Read only the
+	// qualified TEST fixture, never emit marker hashes or boot identity.
+	rel, err := filepath.Rel(root, b.DataRoot)
+	if err != nil || !filepath.IsLocal(rel) {
+		t.Fatal("observation data is outside TEST root")
+	}
+	f, err := os.Open(filepath.Join(b.DataRoot, "observations.json"))
+	if os.IsNotExist(err) {
+		t.Log("observation claims absent")
+		return
+	}
+	if err != nil {
+		t.Log("observation claims unreadable")
+		return
+	}
+	defer f.Close()
+	const maxBytes = 48 * 1024
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil || len(data) > maxBytes {
+		t.Log("observation claims unavailable or oversized")
+		return
+	}
+	var state struct {
+		Entries []struct {
+			Bits uint8 `json:"bits"`
+		} `json:"entries"`
+	}
+	if json.Unmarshal(data, &state) != nil || len(state.Entries) > 256 {
+		t.Log("observation claims invalid")
+		return
+	}
+	var counts [4]int
+	for _, entry := range state.Entries {
+		if entry.Bits == 0 || entry.Bits > 3 {
+			t.Log("observation claim bits invalid")
+			return
+		}
+		counts[entry.Bits]++
+	}
+	t.Logf("observation claim census desktop_only=%d webhook_only=%d both=%d", counts[1], counts[2], counts[3])
 }

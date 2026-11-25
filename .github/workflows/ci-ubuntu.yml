@@ -33,7 +33,9 @@ jobs:
   scope:
     if: github.event_name != 'workflow_dispatch'
     name: Classify release tooling scope
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    # Read-only, fail-open classifier: free the shared Linux native CI pool.
+    # Fork PRs already used this hosted runner; E2E remains on original VMs.
+    runs-on: ubuntu-latest
     timeout-minutes: 50
     permissions:
       contents: read
@@ -2065,7 +2067,8 @@ jobs:
     needs: scope
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && needs.scope.outputs.mode != 'docs' }}
     name: Lint
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
+    # The managed runner reported setup-go success without installing Go.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -2076,6 +2079,9 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.26'
+
+      - name: Verify Go toolchain
+        run: go version
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev

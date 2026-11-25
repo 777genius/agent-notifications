@@ -235,6 +235,16 @@ func (h *Handler) gitBranch(cwd string) string {
 	return platform.GetGitBranchContext(ctx, cwd)
 }
 
+// gitRepo is bounded by the hook deadline the same way as gitBranch.
+func (h *Handler) gitRepo(cwd string) string {
+	if h.hookDeadline.IsZero() {
+		return platform.GetGitRepoNameContext(context.Background(), cwd)
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), h.hookDeadline)
+	defer cancel()
+	return platform.GetGitRepoNameContext(ctx, cwd)
+}
+
 // HandleHook handles a hook event
 func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	// Benchmark instrumentation (enabled via config debug.benchmark)
@@ -443,6 +453,26 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 			logging.Debug("Question suppressed due to cooldown after task complete")
 			// Lock will be released by defer
 			return nil
+		}
+	}
+
+	// Claude follows an AskUserQuestion/ExitPlanMode PreToolUse with a generic
+	// permission_prompt Notification for the same dialog (#662). Since that
+	// Notification is a permission request (#633), the question cooldown above
+	// no longer sees it; drop it here when the tool was just notified. A prompt
+	// with specific text (for example "...to use Bash") always notifies.
+	if ev.Product == ProductClaude && status == analyzer.StatusPermissionRequest {
+		if p, ok := ev.Payload.(NotificationPayload); ok && isGenericClaudePermissionPrompt(p.Message) {
+			paired, err := h.stateMgr.ConsumeInteractiveToolPermissionPair(
+				keys.stateKey,
+				h.cfg.GetSuppressQuestionAfterAnyNotificationSeconds(),
+			)
+			if err != nil {
+				logging.Warn("Failed to check interactive-tool permission pairing: %v", err)
+			} else if paired {
+				logging.Debug("Permission prompt suppressed: generic echo of a just-notified interactive tool")
+				return nil
+			}
 		}
 	}
 

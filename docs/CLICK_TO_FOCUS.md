@@ -85,7 +85,9 @@ For an eligible test profile, **back up the selected configuration** and explici
 
 Use the same agent-local settings under `agents.gemini` or `agents.cursor` for those agents. The global `clickToFocus: false` remains an absolute veto. The existing `config edit` command does not edit `/agents/...` paths, so edit and inspect schema-2 agent profiles manually, preserving all other profiles. Do not enable navigation by copying an old saved `clickToFocus: true` alone.
 
-The CI workflow `strict-terminal-native-linux.yml` verifies the real X11 desktop, product daemon, dunst banner, synthetic X11 click through `xdotool` under Xvfb, and consent-revocation/spoofing negatives. Its sender is an isolated native Go fixture **not an authenticated installed Qoder, Gemini or Cursor CLI turn**. Thus the shared guarded mechanism is exercised, but the entire native CLI → notification → click → correct window path remains unqualified for each agent. Same-user compromised processes are outside the notifier's sandbox; this path prevents accidental/wrong-window activation, not arbitrary actions by a compromised user process.
+The CI workflow `strict-terminal-native-linux.yml` verifies the real X11 desktop, product daemon, dunst banner, synthetic X11 click through `xdotool` under Xvfb, and consent-revocation/spoofing negatives. Its sender is an isolated native Go fixture. The separate [Gemini desktop suite](gemini-notifications.md#automated-linux-desktop-e2e) uses the actual installed Gemini CLI and production hooks with a local model provider to exercise completion → banner → click → originating window. Authenticated CLI-to-click qualification remains open for Qoder, Gemini and Cursor; the local-provider Gemini test does not establish the other agents' event paths.
+
+Same-user compromised processes are outside the notifier's sandbox; this path prevents accidental/wrong-window activation, not arbitrary actions by a compromised user process.
 
 ## macOS
 

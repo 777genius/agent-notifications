@@ -13,12 +13,12 @@ import (
 // generateMessage generates a notification body and action summary.
 // If messages are provided (from handleStopEvent), uses them directly to avoid re-reading the transcript.
 func (h *Handler) generateMessage(ev Event, status analyzer.Status, messages []jsonl.Message, insight *TurnInsight) (body, actions string) {
-	// A permission prompt must describe the actual host request, not an
-	// unrelated transcript summary. Keep the body bounded and one-line.
+	// Keep the host's permission prompt authoritative. A generic Claude text
+	// may add a bounded recent tool *context* label, not an exact approval target.
 	if ev.Product == ProductClaude && status == analyzer.StatusPermissionRequest {
 		if p, ok := ev.Payload.(NotificationPayload); ok {
 			if message := strings.Join(strings.Fields(p.Message), " "); message != "" {
-				return truncateRunes(message, 180), ""
+				return claudePermissionBody(message, ev.Session), ""
 			}
 		}
 		return summary.GenerateSimple(status, h.cfg), ""

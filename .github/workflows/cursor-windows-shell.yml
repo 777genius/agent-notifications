@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   # Exercise the genuine installed Cursor/OS path when this qualification workflow changes.
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/cursor-windows-shell.yml'
 # Cancel only obsolete ordinary PR checks; retain each manual or exact-source push qualification.
@@ -19,7 +19,7 @@ permissions:
 jobs:
   native-shell:
     # Do not execute a fork's modified workflow against the pinned vendor CLI.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft != true)
     runs-on: windows-2025
     timeout-minutes: 20
     steps:
@@ -60,6 +60,7 @@ jobs:
           New-Item -ItemType Directory -Path $stage | Out-Null
           $binary = Join-Path $stage 'claude-notifications-windows-amd64.exe'
           go test ./internal/cursorinstall -count=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go test ./internal/cursorsource -run '^TestQualifiedWindowsPowerShellBOM$' -count=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go test ./internal/desktopinstall -run '^TestWindowsPortableShortcutNonSharingPrimary$' -count=1
@@ -96,7 +97,11 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
+          # The dual-channel step uses a separate TEST root. Its local environment
+          # does not persist to this step; the first successful fixture is already uninstalled.
+          if ($env:CURSOR_TEST_BOTH_ROOT) { $env:CURSOR_TEST_ROOT = $env:CURSOR_TEST_BOTH_ROOT }
           go test ./cmd/claude-notifications -run '^TestWindowsCursorInstalledDiagnosis$' -count=1 -v 2>&1 | Tee-Object (Join-Path $env:CURSOR_TEST_ROOT 'installed-diagnosis.stdout')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Restore disposable CI audit settings even after TEST failure
         if: always() && env.CURSOR_TEST_ROOT != ''
         shell: pwsh
