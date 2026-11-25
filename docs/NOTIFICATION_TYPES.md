@@ -2,7 +2,7 @@
 
 # Supported Notification Types
 
-The Claude triggers are listed below. Codex uses a different event mapping, described in [Codex support](CODEX.md).
+The Claude triggers are listed below. Codex uses a different event mapping, described in [Codex support](CODEX.md). Claude's permission notification uses the delayed, idle-aware host message; when the host text is generic, it may include a bounded **recent tool** label from a local transcript. This label is context, not proof of the exact approval target; command input is never displayed.
 
 | Status | Icon | Description | Trigger |
 |--------|------|-------------|---------|
@@ -12,7 +12,7 @@ The Claude triggers are listed below. Codex uses a different event mapping, desc
 | Plan Ready | 📋 | Plan ready for approval | PreToolUse hook (ExitPlanMode) |
 | Session Limit Reached | ⏱️ | Session limit reached | Stop/SubagentStop hooks (state machine detects "Session limit reached" text in last 3 assistant messages) |
 | API Error | 🔴 | Authentication expired, rate limit, server error, connection error | Stop/SubagentStop hooks (state machine detects via `isApiErrorMessage` flag + `error` field from JSONL) |
-| Permission Request | 🔐 | Codex is waiting for tool approval | Codex `PermissionRequest` hook (Codex only) |
+| Permission Request | 🔐 | Approval is needed for a Claude Code or Codex tool | Claude `Notification(permission_prompt)` or Codex `PermissionRequest` hook |
 
 ## Gemini CLI
 
