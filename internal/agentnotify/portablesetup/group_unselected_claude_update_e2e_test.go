@@ -3,6 +3,7 @@
 package portablesetup
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/777genius/agent-notifications/install/uapinstaller"
 	"github.com/777genius/agent-notifications/internal/agentnotify/portable"
@@ -32,7 +34,8 @@ func TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude(t *testing.T
 	if runtime.GOOS == "darwin" && runtime.GOARCH != "arm64" {
 		t.Skip("Local selected delivery has no qualified Darwin Intel tuple")
 	}
-	ctx := testCtx(t)
+	// Bound each independent operation so fixture work and rejection cases
+	// do not consume the final update's deadline.
 	mat, base, root := registryMaterializerFixture(t)
 
 	claudeRoot := filepath.Join(root, "TEST-unselected-claude")
@@ -94,14 +97,14 @@ func TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude(t *testing.T
 	// Local adds a frozen Stop hook to the canonical package. Install Claude
 	// from that same composed source before the selected Codex+Local add, so
 	// the three-client fixture does not request a new revision via OpInstall.
-	_, sharedLocal, closeShared, err := mat.composeLocalPackage(ctx, local, false)
+	_, sharedLocal, closeShared, err := mat.composeLocalPackage(testCtx(t), local, false)
 	if err != nil {
 		t.Fatal("compose shared initial package:", err)
 	}
 	defer closeShared()
 	claudeReq.PackageRoot = sharedLocal.PackageRoot
 
-	claudeBinding, err := mat.Install(ctx, claudeReq)
+	claudeBinding, err := mat.Install(testCtx(t), claudeReq)
 	if err != nil {
 		t.Fatal("install initial unselected Claude:", err)
 	}
@@ -111,7 +114,7 @@ func TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude(t *testing.T
 	}
 	local.ExpectedGeneration, codexReq.ExpectedGeneration = snapshot.Ledger.Generation, snapshot.Ledger.Generation
 	local.OperationID, codexReq.OperationID = "TEST-three-client-group-install", "TEST-three-client-group-install"
-	selected, err := mat.ApplyGroup(ctx, []MaterializeRequest{codexReq, local})
+	selected, err := mat.ApplyGroup(testCtx(t), []MaterializeRequest{codexReq, local})
 	if err != nil || len(selected) != 2 {
 		t.Fatalf("install selected Codex+Local: %+v %v", selected, err)
 	}
@@ -227,7 +230,7 @@ func TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude(t *testing.T
 					t.Fatal(writeErr)
 				}
 			})
-			if _, applyErr := mat.ApplyGroup(ctx, []MaterializeRequest{codexReq, local}); applyErr == nil ||
+			if _, applyErr := mat.ApplyGroup(testCtx(t), []MaterializeRequest{codexReq, local}); applyErr == nil ||
 				!strings.Contains(applyErr.Error(), "unselected live client claude") {
 				t.Fatalf("unverified Claude facts did not refuse pre-handoff: %v", applyErr)
 			}
@@ -245,7 +248,14 @@ func TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude(t *testing.T
 			}
 		})
 	}
-	updated, err := mat.ApplyGroup(ctx, []MaterializeRequest{codexReq, local})
+	// This positive two-client update exercises real SDK projection, ownership
+	// verification and durable host finalization under the race detector. On a
+	// loaded macOS runner the existing 30s fixture budget expired mid-activation.
+	// Keep the longer deadline local to this operation; the refusal cases and
+	// production deadlines remain unchanged.
+	updateCtx, cancelUpdate := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelUpdate()
+	updated, err := mat.ApplyGroup(updateCtx, []MaterializeRequest{codexReq, local})
 	if err != nil {
 		// Bounded failure-only evidence identifies which saved SDK proof is
 		// absent without weakening native activation or the acceptance gate.
@@ -363,7 +373,7 @@ func TestGroupUpdateCodexLocalCompletesAndPreservesUnselectedClaude(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	lease, err := portable.Acquire(ctx, claudeBinding.DataRoot, claudeName)
+	lease, err := portable.Acquire(testCtx(t), claudeBinding.DataRoot, claudeName)
 	if err != nil {
 		t.Fatal("unselected Claude locator lost:", err)
 	}

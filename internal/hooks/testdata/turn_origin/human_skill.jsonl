@@ -1,0 +1,12 @@
+{"type":"user","timestamp":"2026-11-19T10:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"Fix the parser"}}
+{"type":"assistant","timestamp":"2026-11-19T10:00:05Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{}}]}}
+{"type":"user","timestamp":"2026-11-19T10:00:06Z","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}
+{"type":"assistant","timestamp":"2026-11-19T10:00:10Z","message":{"role":"assistant","content":[{"type":"text","text":"The parser is fixed."}]}}
+{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-11-19T10:00:11Z"}
+{"type":"user","timestamp":"2026-11-19T10:05:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"/review the notes"}}
+{"type":"assistant","timestamp":"2026-11-19T10:05:02Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{}}]}}
+{"type":"user","timestamp":"2026-11-19T10:05:03Z","message":{"role":"user","content":[{"type":"tool_result","content":"Launching skill"}]}}
+{"type":"user","timestamp":"2026-11-19T10:05:03Z","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /skills/review"}]}}
+{"type":"assistant","timestamp":"2026-11-19T10:05:05Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Write","input":{}}]}}
+{"type":"user","timestamp":"2026-11-19T10:05:06Z","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}
+{"type":"assistant","timestamp":"2026-11-19T10:05:10Z","message":{"role":"assistant","content":[{"type":"text","text":"Recorded the result in the notes file."}]}}

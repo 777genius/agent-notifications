@@ -178,7 +178,11 @@ func checkLock(dir *os.File) error {
 }
 
 func privateFile(parent *os.File, name string, limit int64) (*os.File, error) {
-	h, err := setupOpenAt(windows.Handle(parent.Fd()), name, windows.FILE_GENERIC_READ, windows.FILE_OPEN, windows.FILE_NON_DIRECTORY_FILE)
+	return privateFileWithShare(parent, name, limit, 0)
+}
+
+func privateFileWithShare(parent *os.File, name string, limit int64, extraShare uint32) (*os.File, error) {
+	h, err := setupOpenAtWithShare(windows.Handle(parent.Fd()), name, windows.FILE_GENERIC_READ, windows.FILE_OPEN, windows.FILE_NON_DIRECTORY_FILE, extraShare)
 	if err != nil {
 		return nil, err
 	}
@@ -202,6 +206,10 @@ func privateFile(parent *os.File, name string, limit int64) (*os.File, error) {
 }
 
 func setupOpenAt(parent windows.Handle, name string, access, disposition, options uint32) (windows.Handle, error) {
+	return setupOpenAtWithShare(parent, name, access, disposition, options, 0)
+}
+
+func setupOpenAtWithShare(parent windows.Handle, name string, access, disposition, options, extraShare uint32) (windows.Handle, error) {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `\/:`) {
 		return 0, fmt.Errorf("invalid relative Windows component")
 	}
@@ -213,7 +221,7 @@ func setupOpenAt(parent windows.Handle, name string, access, disposition, option
 	attrs.Length = uint32(unsafe.Sizeof(attrs))
 	var handle windows.Handle
 	var status windows.IO_STATUS_BLOCK
-	share := uint32(windows.FILE_SHARE_READ)
+	share := uint32(windows.FILE_SHARE_READ) | extraShare
 	if options&windows.FILE_DIRECTORY_FILE != 0 {
 		share = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
 	}

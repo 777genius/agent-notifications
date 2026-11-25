@@ -15,6 +15,7 @@ import (
 type SessionState struct {
 	SessionID               string `json:"session_id"`
 	LastInteractiveTool     string `json:"last_interactive_tool"`
+	PairNotifiedTime        int64  `json:"last_interactive_notified_ts,omitempty"`
 	LastTimestamp           int64  `json:"last_ts"`
 	LastTaskCompleteTime    int64  `json:"last_task_complete_ts,omitempty"`
 	LastNotificationTime    int64  `json:"last_notification_ts,omitempty"`
@@ -112,6 +113,7 @@ func (m *Manager) UpdateInteractiveTool(sessionID, toolName, cwd string) error {
 
 	state.LastInteractiveTool = toolName
 	state.LastTimestamp = platform.CurrentTimestamp()
+	state.PairNotifiedTime = 0
 	state.CWD = cwd
 
 	return m.Save(state)
@@ -229,6 +231,11 @@ func (m *Manager) UpdateLastNotificationWithIdentity(sessionID string, status an
 	state.LastNotificationBody = body
 	state.LastNotificationTurn = turn
 	state.LastNotificationEvent = event
+	// Preserve the pairing evidence even if a different permission or
+	// notification is delivered before Claude's generic permission echo.
+	if event == "PreToolUse" && (state.LastInteractiveTool == "AskUserQuestion" || state.LastInteractiveTool == "ExitPlanMode") && state.LastTimestamp != 0 && state.LastNotificationTime >= state.LastTimestamp {
+		state.PairNotifiedTime = state.LastNotificationTime
+	}
 	if stopHash != "" {
 		state.LastStopPayloadHash = stopHash
 		state.LastStopPayloadTime = state.LastNotificationTime
@@ -299,6 +306,38 @@ func (m *Manager) ShouldSuppressQuestionAfterAnyNotification(sessionID string, c
 	// and rely on the caller to log the result
 
 	return shouldSuppress, nil
+}
+
+// ConsumeInteractiveToolPermissionPair reports whether a permission prompt may
+// be the paired echo of an AskUserQuestion or ExitPlanMode tool that was
+// already notified. Claude fires PreToolUse for these tools and then a
+// permission_prompt Notification for the same dialog a few seconds later
+// (#662). A pair is pending when, within cooldownSeconds, such a tool was
+// recorded and a PreToolUse notification was delivered after it.
+//
+// The pairing is single-use: any recorded interactive tool is cleared, so
+// later permission prompts are never matched against it.
+func (m *Manager) ConsumeInteractiveToolPermissionPair(sessionID string, cooldownSeconds int) (bool, error) {
+	state, err := m.Load(sessionID)
+	if err != nil {
+		return false, err
+	}
+	if state == nil || (state.LastInteractiveTool != "AskUserQuestion" && state.LastInteractiveTool != "ExitPlanMode") {
+		return false, nil
+	}
+
+	now := platform.CurrentTimestamp()
+	window := int64(cooldownSeconds)
+	paired := cooldownSeconds > 0 && state.LastTimestamp != 0 && state.PairNotifiedTime >= state.LastTimestamp &&
+		state.PairNotifiedTime != 0 && now >= state.LastTimestamp && now >= state.PairNotifiedTime &&
+		now-state.LastTimestamp < window && now-state.PairNotifiedTime < window
+
+	state.LastInteractiveTool = ""
+	state.PairNotifiedTime = 0
+	if err := m.Save(state); err != nil {
+		return false, err
+	}
+	return paired, nil
 }
 
 // normalizeMessage normalizes a message for comparison by:

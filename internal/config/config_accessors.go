@@ -53,6 +53,16 @@ func (c *Config) ShouldNotifyOnTextResponse() bool {
 	return *c.Notifications.NotifyOnTextResponse
 }
 
+// ShouldNotifyOnAgentInitiatedTurns returns true if Claude Code completion
+// notifications should be sent for turns that typed user input did not start
+// (default: true)
+func (c *Config) ShouldNotifyOnAgentInitiatedTurns() bool {
+	if c.Notifications.NotifyOnAgentInitiatedTurns == nil {
+		return true // Default: notify for every turn
+	}
+	return *c.Notifications.NotifyOnAgentInitiatedTurns
+}
+
 // ShouldSuppressForSubagents returns true if notifications should be suppressed
 // when transcript_path contains /subagents/ (default: true)
 func (c *Config) ShouldSuppressForSubagents() bool {
@@ -133,8 +143,8 @@ func (c *Config) ShouldRespectDisplaySleep() bool {
 
 // ShouldReplaceNotificationsPerSession returns true if a newer desktop
 // notification from the same session should replace that session's previous
-// banner instead of stacking a new one (default: false). macOS only; other
-// delivery paths always stack.
+// banner instead of stacking a new one (default: false). macOS and Linux;
+// other delivery paths always stack.
 func (c *Config) ShouldReplaceNotificationsPerSession() bool {
 	if c.Notifications.ReplaceNotificationsPerSession == nil {
 		return false // Default: stack, never replace

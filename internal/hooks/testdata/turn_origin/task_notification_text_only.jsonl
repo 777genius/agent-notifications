@@ -1,0 +1,6 @@
+{"type":"user","timestamp":"2026-11-19T10:00:00Z","origin":{"kind":"human"},"message":{"role":"user","content":"Fix the parser"}}
+{"type":"assistant","timestamp":"2026-11-19T10:00:05Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","input":{}}]}}
+{"type":"user","timestamp":"2026-11-19T10:00:06Z","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}
+{"type":"assistant","timestamp":"2026-11-19T10:00:10Z","message":{"role":"assistant","content":[{"type":"text","text":"The parser is fixed."}]}}
+{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-11-19T10:00:11Z"}
+{"type":"user","timestamp":"2026-11-19T10:05:00Z","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>\n<task-id>a1b2c3</task-id>\n</task-notification>"}}

@@ -266,12 +266,23 @@ func buildTerminalNotifierArgsWithOptions(title, message, bundleID, cwd, ghostty
 // unique so unrelated notifications are never collapsed. Conversation grouping
 // in Notification Center is -threadID, independent of this switch.
 func notificationGroupID(sessionID string, replacePerSession bool) string {
-	if replacePerSession {
-		if id := strings.TrimSpace(sessionID); id != "" && !strings.EqualFold(id, "unknown") {
-			return notificationGroupPrefix + id
-		}
+	if key := replacementSessionKey(sessionID, replacePerSession); key != "" {
+		return notificationGroupPrefix + key
 	}
 	return uniqueNotificationGroupID()
+}
+
+// replacementSessionKey returns the session id that a replaceable desktop
+// notification is keyed on, or "" when the notification must stay unique:
+// replacement is off, or the session id is empty or "unknown".
+func replacementSessionKey(sessionID string, replacePerSession bool) string {
+	if !replacePerSession {
+		return ""
+	}
+	if id := strings.TrimSpace(sessionID); id != "" && !strings.EqualFold(id, "unknown") {
+		return id
+	}
+	return ""
 }
 
 // uniqueNotificationGroupID returns a never-reused -group value.

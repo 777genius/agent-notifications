@@ -16,6 +16,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("terminalClickConsentVersion must be 1 when set")
 	}
 
+	if err := c.validateDesktopTemplates(); err != nil {
+		return err
+	}
+
 	// Validate webhook preset (only if webhooks are enabled)
 	validPresets := map[string]bool{
 		"slack":    true,

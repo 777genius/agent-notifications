@@ -33,7 +33,7 @@ func EnsureClaudeNotificationsApp() error {
 
 // sendLinuxNotification is a stub for non-Linux platforms.
 // On Windows, this falls back to beeep directly.
-func sendLinuxNotification(title, body, appIcon string, cfg *config.Config, cwd string) error {
+func sendLinuxNotification(title, body, appIcon string, cfg *config.Config, cwd string, focus bool, replaceKey string) error {
 	return beeep.Notify(title, body, appIcon)
 }
 
