@@ -18,7 +18,7 @@ import (
 )
 
 // This test is opt-in in the generic suite, but the dedicated native CI lane
-// installs exactly the reporter's Claude Code 2.1.317 and REQUIRES a PASS.
+// installs exactly the reporter's Claude Code 2.1.332 and REQUIRES a PASS.
 // It invokes the real UAP materializer, real Claude plugin listing and real
 // user-scope skills-dir projection inside an isolated, throwaway HOME.
 func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
