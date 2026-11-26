@@ -11,13 +11,13 @@ import (
 )
 
 func TestRenumberedOnVolumeRequiresRecordedSameVolumeAndInode(t *testing.T) {
-	const vol = "btrfs:ad316eced7cc2670"
+	const vol = "btrfs-subvol:000102030405060708090a0b0c0d0e0f:257"
 	for _, tc := range []struct {
 		name, want, current, volume, currentVolume string
 		ok                                         bool
 	}{
 		{"renumbered same volume", "56:43346541", "64:43346541", vol, vol, true},
-		{"other subvolume or snapshot", "56:43346541", "64:43346541", vol, "btrfs:ad316eced7cc2677", false},
+		{"other subvolume or snapshot", "56:43346541", "64:43346541", vol, "btrfs-subvol:000102030405060708090a0b0c0d0e0f:258", false},
 		{"legacy marker without volume", "56:43346541", "64:43346541", "", vol, false},
 		{"not btrfs now", "56:43346541", "64:43346541", vol, "", false},
 		{"replaced inode", "56:43346541", "64:43346542", vol, vol, false},
@@ -85,7 +85,7 @@ func TestSetupStateSurvivesBtrfsRenumberOnlyOnRecordedVolume(t *testing.T) {
 	if err := matches(state, root, id, volume); err != nil {
 		t.Fatalf("same directory and recorded volume refused: %v", err)
 	}
-	if matches(state, root, id, "btrfs:0000000000000000") == nil {
+	if matches(state, root, id, "btrfs-subvol:00000000000000000000000000000000:0") == nil {
 		t.Fatal("matching device and inode accepted a mismatched recorded volume")
 	}
 	_, ino, _ := strings.Cut(id, ":")
@@ -102,7 +102,7 @@ func TestSetupStateSurvivesBtrfsRenumberOnlyOnRecordedVolume(t *testing.T) {
 	if err := matches(state, root, id, ""); err != nil {
 		t.Fatalf("legacy exact device/inode marker should remain valid: %v", err)
 	}
-	if matches(state, root, stored, "btrfs:0000000000000000") == nil {
+	if matches(state, root, stored, "btrfs-subvol:00000000000000000000000000000000:0") == nil {
 		t.Fatal("other volume accepted")
 	}
 	if err = state.Close(); err != nil {
