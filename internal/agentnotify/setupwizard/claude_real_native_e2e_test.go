@@ -15,6 +15,7 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	notifysetup "github.com/777genius/agent-notifications/internal/agentnotify/setup"
 )
 
 // This test is opt-in in the generic suite, but the dedicated native CI lane
@@ -42,7 +43,31 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	control, runtimeRoot, global, _, _ := managedRuntime(t)
+	control, runtimeRoot, global, _, generation := managedRuntime(t)
+	// Match /init's policy-only configure stage before the UAP wizard. Keep the
+	// global config private and inert; no app/native permission or notification
+	// delivery is requested by this path.
+	if err := os.WriteFile(global, []byte(`{"foreign":{"keep":true},"notifications":{"desktop":{"enabled":false,"sound":false,"clickToFocus":false}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	policyOptions := notifysetup.Options{
+		ControlRoot: control, RuntimeRoot: runtimeRoot,
+		Owner: "existing-installer", ConsumerID: "existing", GlobalConfig: global,
+	}
+	enabled := true
+	policyRequest := notifysetup.Request{ExpectedGeneration: generation, Enabled: &enabled, Route: &notifysetup.Route{}}
+	prepared, err := os.ReadFile(global)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := notifysetup.Inspect(ctx, policyOptions, policyRequest, prepared); err != nil {
+		t.Fatalf("/init policy-only configure preflight: %v", err)
+	}
+	configured, err := notifysetup.Apply(ctx, policyOptions, policyRequest)
+	if err != nil || !configured.Enabled || configured.Namespace == "" {
+		t.Fatalf("/init policy-only configure did not persist durable setup state: result=%+v err=%v", configured, err)
+	}
+
 	probe := buildProbe(t)
 	pkg := filepath.Join(filepath.Dir(control), "package")
 	writePackage(t, pkg, probe)
@@ -50,10 +75,10 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 	if err := os.MkdirAll(scope, 0700); err != nil {
 		t.Fatal(err)
 	}
-	off := false
+	off, on := false, true
 	req := Request{
 		Action: ActionInstall, Agents: []string{"claude"}, Yes: true,
-		Hooks: &off, PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot,
+		Hooks: &off, AgentNotify: &on, PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot,
 		GlobalConfig: global, ClaudeConfig: claudeRoot, ClientExecutable: executable,
 		Helper: probe, ScopeRoot: scope,
 	}
