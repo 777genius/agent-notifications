@@ -304,14 +304,25 @@ func matches(f, parent *os.File, want, volume string) error {
 	if e = unix.Fstat(int(parent.Fd()), &parentStat); e != nil {
 		return e
 	}
-	if installruntime.MatchPersistedDirectory(want, id, fmt.Sprintf("%d", parentStat.Dev)) {
-		return nil
+	match := installruntime.MatchPersistedDirectory(want, id, fmt.Sprintf("%d", parentStat.Dev))
+	if volume == "" {
+		// Legacy and non-Btrfs markers retain the original exact/OS-specific
+		// rule. Do not invent volume evidence for a renumbered legacy record.
+		if match {
+			return nil
+		}
+		return fmt.Errorf("owned directory identity changed (no recorded volume)")
 	}
 	current, e := volumeID(f)
 	if e != nil {
 		return e
 	}
-	if !renumberedOnVolume(want, id, volume, current) {
+	// Check the durable volume even when dev:ino happens to match: otherwise
+	// a replaced mount using colliding inode/device numbers could be adopted.
+	if current != volume {
+		return fmt.Errorf("owned directory volume changed")
+	}
+	if !match && !renumberedOnVolume(want, id, volume, current) {
 		return fmt.Errorf("owned directory identity changed")
 	}
 	return nil
