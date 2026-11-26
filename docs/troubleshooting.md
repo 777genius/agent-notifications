@@ -54,6 +54,24 @@ for verified, explicit recovery. An incomplete `/init` may also leave the
 portable skill absent because it stops before the UAP wizard; this does not
 prove that an existing MCP binding was intentionally disabled.
 
+### Btrfs device renumbering after reboot
+
+On Linux/Btrfs, a subvolume can retain the same directory inode while its
+kernel-assigned device number changes across boots. New setup ownership records
+bind the directory to the filesystem UUID **and** the Btrfs subvolume ID, so
+normal reboot renumbering remains valid without accepting another snapshot
+(which can contain identical inode numbers and journal data).
+
+**Existing records written before this fix have no recorded subvolume ID.**
+If their device number has already changed, there is no trustworthy evidence
+to tell the original directory from a substituted snapshot. The installer
+therefore reports `initialization_recovery_required` rather than silently
+claiming the old state. Preserve the existing control directory and policy;
+do not delete, overwrite, or manually rewrite `setupState` or the journal.
+Use the read-only inspection commands above and arrange explicit verified
+recovery. A kernel/device renumber alone is **not** sufficient proof for
+automatic adoption.
+
 Old versioned cache file entries may remain owned while another
 `Consumers[*].RuntimeRoot` still references that old root; the final
 consumer's verified relocation retires its file ownership without deleting
