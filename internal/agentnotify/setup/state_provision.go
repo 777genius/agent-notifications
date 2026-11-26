@@ -27,6 +27,7 @@ type ownership struct {
 	DirectoryID    string `json:"directoryID"`
 	Phase          string `json:"phase"`
 	Namespace      string `json:"namespace"`
+	Volume         string `json:"volume,omitempty"`
 }
 
 const stageName = ".setup-state"

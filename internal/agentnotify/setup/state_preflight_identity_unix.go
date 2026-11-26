@@ -3,9 +3,10 @@
 package setup
 
 // Use the same descriptor-relative, persisted-directory identity check as the
-// setup transaction. Darwin may renumber the device after remount/reboot,
-// but the parent device and persisted inode must still match.
-func inspectPersistedStateIdentity(rootPath, name, expected string) error {
+// setup transaction. Darwin may renumber the device after remount/reboot, but
+// the parent device and persisted inode must still match. On btrfs only a
+// recorded matching subvolume admits a renumbered device (renumberedOnVolume).
+func inspectPersistedStateIdentity(rootPath, name, expected, volume string) error {
 	root, err := openRoot(rootPath)
 	if err != nil {
 		return err
@@ -16,7 +17,7 @@ func inspectPersistedStateIdentity(rootPath, name, expected string) error {
 		return err
 	}
 	defer func() { _ = state.Close() }()
-	if err := matches(state, root, expected); err != nil {
+	if err := matches(state, root, expected, volume); err != nil {
 		return err
 	}
 	// Exact private directories and permanent spool lock must satisfy the
