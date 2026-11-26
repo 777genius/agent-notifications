@@ -28,27 +28,38 @@ jobs:
       - name: Resolve candidate library with official Go module checksums
         shell: bash
         env:
-          UAP_CANDIDATE_SHA: 1b624328ec859470f75dadaaeca8510194a9bd1d
+          UAP_CANDIDATE_SHA: ff5f378252aed6c957718ee1b7c95215890cfcfd
           GOWORK: 'off'
         run: |
           set -euo pipefail
-          module=github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins
-          # This nested module has no Go package at its root. Resolve the
-          # module itself rather than asking go get to find a root package.
-          version="$(go mod download -json "$module@$UAP_CANDIDATE_SHA" | jq -er --arg module "$module" 'select(.Path == $module) | .Version')"
-          [[ "$version" == *"-${UAP_CANDIDATE_SHA:0:12}" ]]
-          go mod edit "-require=$module@$version"
+          # The agentplugins module uses a local replace for integrationctl
+          # in UAP's workspace. External consumers ignore that replace, so
+          # both modules must resolve to the same immutable commit.
+          modules=(
+            github.com/777genius/plugin-kit-ai/install/integrationctl
+            github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins
+          )
+          versions=()
+          for module in "${modules[@]}"; do
+            version="$(go mod download -json "$module@$UAP_CANDIDATE_SHA" | jq -er --arg module "$module" 'select(.Path == $module) | .Version')"
+            [[ "$version" == *"-${UAP_CANDIDATE_SHA:0:12}" ]]
+            versions+=("$version")
+            go mod edit "-require=$module@$version"
+          done
           go mod tidy
           go mod verify
-          selected="$(go list -m -f '{{.Version}}' "$module")"
-          test "$selected" = "$version"
-          go list -m "$module"
+          for i in "${!modules[@]}"; do
+            selected="$(go list -m -f '{{.Version}}' "${modules[i]}")"
+            test "$selected" = "${versions[i]}"
+            go list -m "${modules[i]}"
+          done
       - name: Install real Claude Code 2.1.332 in disposable runner profile
         shell: bash
         run: |
           set -euo pipefail
           root="$(mktemp -d "$RUNNER_TEMP/TEST-claude-uap-XXXXXX")"
           mkdir -m 0700 "$root/home" "$root/xdg-config"
+          export HOME="$root/home" XDG_CONFIG_HOME="$root/xdg-config"
           printf 'CLAUDE_UAP_CANDIDATE_ROOT=%s\n' "$root" >> "$GITHUB_ENV"
           npm_config_cache="$root/npm-cache" npm --prefix "$root" install --ignore-scripts --no-audit --no-fund --no-save @anthropic-ai/claude-code@2.1.332
           node "$root/node_modules/@anthropic-ai/claude-code/install.cjs"
