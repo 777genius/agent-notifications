@@ -2095,10 +2095,10 @@ jobs:
           version: v2.12.2
           args: --timeout=5m --max-same-issues=0
 
-btrfs-setup:
+  btrfs-setup:
     name: Native Btrfs setup ownership E2E
     needs: [scope]
-    if: ${ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode == 'full' }}
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode == 'full' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
