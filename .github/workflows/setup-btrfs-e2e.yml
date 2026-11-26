@@ -40,8 +40,8 @@ jobs:
           truncate -s 256M "$image"
           mkfs.btrfs -f -q "$image"
           mkdir -p "$mountpoint"
-          sudo mount -t btrfs -o loop "$image" "$mountpoint"
-          sudo mkdir -m 0700 "$mountpoint/test-tmp"
+          sudo mount -t btrfs -o loop,user_subvol_rm_allowed "$image" "$mountpoint"
+          sudo btrfs subvolume create "$mountpoint/test-tmp"
           sudo chown "$(id -u):$(id -g)" "$mountpoint/test-tmp"
           printf 'BTRFS_TEST_TMPDIR=%s\n' "$mountpoint/test-tmp" >> "$GITHUB_ENV"
           printf 'BTRFS_MOUNT=%s\n' "$mountpoint" >> "$GITHUB_ENV"
@@ -76,7 +76,10 @@ jobs:
         if: always()
         shell: bash
         run: |
-          if [ -n "${BTRFS_MOUNT:-}" ]; then
+          if [ -n "${BTRFS_TEST_TMPDIR:-}" ] && mountpoint -q "${BTRFS_MOUNT:-/nonexistent}"; then
+            sudo btrfs subvolume delete "$BTRFS_TEST_TMPDIR"
+          fi
+          if [ -n "${BTRFS_MOUNT:-}" ] && mountpoint -q "$BTRFS_MOUNT"; then
             sudo umount "$BTRFS_MOUNT"
           fi
           rm -f "$RUNNER_TEMP/setup-btrfs.img"
