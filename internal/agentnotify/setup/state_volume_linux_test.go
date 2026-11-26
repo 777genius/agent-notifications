@@ -3,11 +3,14 @@
 package setup
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
 func TestRenumberedOnVolumeRequiresRecordedSameVolumeAndInode(t *testing.T) {
