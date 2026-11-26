@@ -73,6 +73,11 @@ do not delete, overwrite, or manually rewrite `setupState` or the journal.
 Use the read-only inspection commands above and arrange explicit verified
 recovery. A kernel/device renumber alone is **not** sufficient proof for
 automatic adoption.
+A downgrade to a binary that predates the optional `volume` field may also
+reject the newer ownership marker during strict decoding. In that case,
+upgrade again to a build with Btrfs-volume support; do not edit or remove the
+marker to make an older binary accept it.
+
 
 Old versioned cache file entries may remain owned while another
 `Consumers[*].RuntimeRoot` still references that old root; the final
