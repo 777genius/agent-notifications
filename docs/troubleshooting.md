@@ -58,9 +58,16 @@ prove that an existing MCP binding was intentionally disabled.
 
 On Linux/Btrfs, a subvolume can retain the same directory inode while its
 kernel-assigned device number changes across boots. New setup ownership records
-bind the directory to the filesystem UUID **and** the Btrfs subvolume ID, so
-normal reboot renumbering remains valid without accepting another snapshot
-(which can contain identical inode numbers and journal data).
+bind the directory to its persistent Btrfs subvolume UUID **and** tree ID using
+the unprivileged, read-only `BTRFS_IOC_GET_SUBVOL_INFO` ioctl. They do not use
+`statfs.f_fsid` or require `CAP_SYS_ADMIN`. A Btrfs snapshot receives a new
+subvolume UUID/ID even when it retains the original inode numbers.
+
+The top-level Btrfs root has no independent subvolume UUID on kernels/filesystems
+that report an all-zero UUID. On that layout this identity cannot be proven, so
+setup fails closed instead of falling back to a device number that may change
+or an inode-only match. A dedicated child subvolume (for example, the user's
+home subvolume) has its own UUID and is supported.
 
 **Existing Btrfs records written before this fix have no recorded subvolume ID.**
 They remain compatible only while the original `st_dev:ino` identity matches
