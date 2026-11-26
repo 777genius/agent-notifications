@@ -63,10 +63,12 @@ normal reboot renumbering remains valid without accepting another snapshot
 (which can contain identical inode numbers and journal data).
 
 **Existing Btrfs records written before this fix have no recorded subvolume ID.**
-Even if the device and inode numbers still match, a snapshot could have
-inherited the inode and a recycled device number. The installer therefore
-reports `initialization_recovery_required` rather than silently claiming the
-old state. Preserve the existing control directory and policy;
+They remain compatible only while the original `st_dev:ino` identity matches
+exactly; the installer never relaxes that legacy comparison after a device
+renumber. If the device number changed, it reports
+`initialization_recovery_required`: there is no trustworthy historical
+subvolume ID from which to prove that the current directory is the original
+rather than a snapshot. Preserve the existing control directory and policy;
 do not delete, overwrite, or manually rewrite `setupState` or the journal.
 Use the read-only inspection commands above and arrange explicit verified
 recovery. A kernel/device renumber alone is **not** sufficient proof for
