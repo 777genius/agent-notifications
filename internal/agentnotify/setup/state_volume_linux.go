@@ -51,9 +51,11 @@ var (
 
 // Btrfs st_dev is a mount-time anonymous device ID. statfs f_fsid is also
 // unsuitable as a durable marker: some kernels mix a changing dev_t into it.
-// Use on-disk filesystem UUID + immutable subvolume ID instead. Snapshots
-// retain inode numbers but receive distinct subvolume IDs. Failure is strict:
-// never fall back to inode-only or f_fsid matching.
+// Use the filesystem UUID reported by BTRFS_IOC_FS_INFO and the stable
+// subvolume ID. Ordinary Btrfs mounts retain this UUID across reboots;
+// cloned mounts with temporary FSIDs are intentionally *not* auto-adopted
+// after a remount. Snapshots retain inode numbers but receive distinct IDs.
+// Failure is strict: never fall back to inode-only or f_fsid matching.
 func volumeID(f *os.File) (string, error) {
 	var stat unix.Statfs_t
 	if err := unix.Fstatfs(int(f.Fd()), &stat); err != nil {
