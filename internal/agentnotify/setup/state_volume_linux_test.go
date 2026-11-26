@@ -34,20 +34,20 @@ func TestRenumberedOnVolumeRequiresRecordedSameVolumeAndInode(t *testing.T) {
 }
 
 func TestBtrfsVolumeIDFormat(t *testing.T) {
-	var fsid [16]byte
-	for i := range fsid {
-		fsid[i] = byte(i)
+	var uuid [16]byte
+	for i := range uuid {
+		uuid[i] = byte(i)
 	}
-	if got, want := btrfsVolumeID(fsid, 257), "btrfs:000102030405060708090a0b0c0d0e0f:257"; got != want {
+	if got, want := btrfsVolumeID(uuid, 257), "btrfs-subvol:000102030405060708090a0b0c0d0e0f:257"; got != want {
 		t.Fatalf("btrfsVolumeID=%q want %q", got, want)
 	}
-	if btrfsVolumeID(fsid, 258) == btrfsVolumeID(fsid, 257) {
+	if btrfsVolumeID(uuid, 258) == btrfsVolumeID(uuid, 257) {
 		t.Fatal("different Btrfs subvolume IDs must not share durable identity")
 	}
-	other := fsid
+	other := uuid
 	other[0] ^= 0xff
-	if btrfsVolumeID(other, 257) == btrfsVolumeID(fsid, 257) {
-		t.Fatal("different Btrfs filesystem UUIDs must not share durable identity")
+	if btrfsVolumeID(other, 257) == btrfsVolumeID(uuid, 257) {
+		t.Fatal("different Btrfs subvolume UUIDs must not share durable identity")
 	}
 }
 
