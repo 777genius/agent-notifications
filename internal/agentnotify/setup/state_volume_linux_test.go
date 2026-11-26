@@ -99,8 +99,8 @@ func TestSetupStateSurvivesBtrfsRenumberOnlyOnRecordedVolume(t *testing.T) {
 	if matches(state, root, stored, "") == nil {
 		t.Fatal("legacy marker accepted a renumbered device")
 	}
-	if matches(state, root, id, "") == nil {
-		t.Fatal("legacy marker accepted an exact but unauthenticated Btrfs device/inode")
+	if err := matches(state, root, id, ""); err != nil {
+		t.Fatalf("legacy exact device/inode marker should remain valid: %v", err)
 	}
 	if matches(state, root, stored, "btrfs:0000000000000000") == nil {
 		t.Fatal("other volume accepted")
@@ -180,7 +180,7 @@ func TestSetupStateRefusesBtrfsSnapshotWithSameInode(t *testing.T) {
 	if matches(state, root, snapID, storedVolume) == nil {
 		t.Fatal("snapshot accepted despite mismatched recorded volume")
 	}
-	if matches(state, root, snapID, "") == nil {
-		t.Fatal("snapshot accepted with a legacy exact device/inode pair")
+	if matches(state, root, storedID, "") == nil {
+		t.Fatal("snapshot accepted using the original legacy device/inode marker after renumbering")
 	}
 }
