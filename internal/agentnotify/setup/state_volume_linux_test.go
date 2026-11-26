@@ -82,6 +82,12 @@ func TestSetupStateSurvivesBtrfsRenumberOnlyOnRecordedVolume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := matches(state, root, id, volume); err != nil {
+		t.Fatalf("same directory and recorded volume refused: %v", err)
+	}
+	if matches(state, root, id, "btrfs:0000000000000000") == nil {
+		t.Fatal("matching device and inode accepted a mismatched recorded volume")
+	}
 	_, ino, _ := strings.Cut(id, ":")
 	stored := "999999:" + ino
 	if strings.HasPrefix(id, "999999:") {
