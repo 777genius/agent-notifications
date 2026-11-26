@@ -136,12 +136,24 @@ func TestSetupStateRefusesBtrfsSnapshotWithSameInode(t *testing.T) {
 	if out, err := exec.Command(btrfs, "subvolume", "create", original).CombinedOutput(); err != nil {
 		t.Skipf("cannot create btrfs subvolume here: %v %s", err, out)
 	}
+	// TempDir's RemoveAll cannot rmdir a Btrfs subvolume. Register explicit
+	// deletion now; snapshots are registered later and therefore deleted first.
+	t.Cleanup(func() {
+		if out, err := exec.Command(btrfs, "subvolume", "delete", original).CombinedOutput(); err != nil {
+			t.Errorf("delete test Btrfs subvolume: %v %s", err, out)
+		}
+	})
 	if err = os.MkdirAll(filepath.Join(original, "control", "state"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := exec.Command(btrfs, "subvolume", "snapshot", original, snapshot).CombinedOutput(); err != nil {
 		t.Skipf("cannot snapshot btrfs subvolume here: %v %s", err, out)
 	}
+	t.Cleanup(func() {
+		if out, err := exec.Command(btrfs, "subvolume", "delete", snapshot).CombinedOutput(); err != nil {
+			t.Errorf("delete test Btrfs snapshot: %v %s", err, out)
+		}
+	})
 	observe := func(dir string) (root, state *os.File, id, volume string) {
 		t.Helper()
 		root, err := openRoot(filepath.Join(dir, "control"))
