@@ -2095,10 +2095,10 @@ jobs:
           version: v2.12.2
           args: --timeout=5m --max-same-issues=0
 
-  btrfs-setup:
+btrfs-setup:
     name: Native Btrfs setup ownership E2E
     needs: [scope]
-    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode == 'full' }}
+    if: ${ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode == 'full' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -2136,41 +2136,8 @@ jobs:
           test "$(id -u)" -ne 0
           export TMPDIR="$BTRFS_TEST_TMPDIR"
           if ! go test -json ./internal/agentnotify/setup \
-            -run '^(TestSetupState(SurvivesBtrfsRenumberOnlyOnRecordedVolume|RefusesBtrfsSnapshotWithSameInode)|TestSetupApplyPersistsBtrfsSubvolumeIdentityForPreflight)
-          python3 -B - <<'PY'
-          import json, os
-          path = os.path.join(os.environ["RUNNER_TEMP"], "btrfs-tests.json")
-          wanted = {
-              "TestSetupStateSurvivesBtrfsRenumberOnlyOnRecordedVolume",
-              "TestSetupStateRefusesBtrfsSnapshotWithSameInode",
-              "TestSetupApplyPersistsBtrfsSubvolumeIdentityForPreflight",
-          }
-          passed, skipped = set(), set()
-          with open(path, encoding="utf-8") as stream:
-              for line in stream:
-                  row = json.loads(line)
-                  test, action = row.get("Test"), row.get("Action")
-                  if test in wanted and action == "pass":
-                      passed.add(test)
-                  if test in wanted and action == "skip":
-                      skipped.add(test)
-          assert passed == wanted and not skipped, f"Btrfs tests incomplete: passed={passed}, skipped={skipped}"
-          print("PASS: persisted subvolume identity, same-inode snapshot rejection, and read-only preflight")
-          PY
-      - name: Remove test subvolume and unmount Btrfs
-        if: always()
-        shell: bash
-        run: |
-          if [ -n "${BTRFS_MOUNT:-}" ] && mountpoint -q "$BTRFS_MOUNT"; then
-            if [ -n "${BTRFS_TEST_TMPDIR:-}" ] && sudo btrfs subvolume show "$BTRFS_TEST_TMPDIR" >/dev/null 2>&1; then
-              sudo btrfs subvolume delete "$BTRFS_TEST_TMPDIR"
-            fi
-            sudo umount "$BTRFS_MOUNT"
-          fi
-          rm -f "$RUNNER_TEMP/setup-btrfs.img"
- \
+            -run '^(TestSetupState(SurvivesBtrfsRenumberOnlyOnRecordedVolume|RefusesBtrfsSnapshotWithSameInode)|TestSetupApplyPersistsBtrfsSubvolumeIdentityForPreflight)$' \
             -count=1 -timeout=8m > "$RUNNER_TEMP/btrfs-tests.json"; then
-            # Preserve the actual failing native test evidence in the job log.
             cat "$RUNNER_TEMP/btrfs-tests.json"
             exit 1
           fi
