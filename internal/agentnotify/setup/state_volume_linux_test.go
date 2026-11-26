@@ -196,3 +196,79 @@ func TestSetupStateRefusesBtrfsSnapshotWithSameInode(t *testing.T) {
 		t.Fatal("snapshot accepted using the original legacy device/inode marker after renumbering")
 	}
 }
+
+func TestSetupApplyPersistsBtrfsSubvolumeIdentityForPreflight(t *testing.T) {
+	o, request := linuxNoneFixture(t)
+	root, err := openRoot(o.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	parentVolume, err := volumeID(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parentVolume == "" {
+		t.Skip("requires a Btrfs child subvolume with a persistent UUID")
+	}
+
+	ctx := contextFor(t)
+	applied, err := Apply(ctx, o, request)
+	if err != nil || !applied.Enabled || applied.Namespace == "" {
+		t.Fatalf("production setup.Apply: result=%+v err=%v", applied, err)
+	}
+	policy, err := installruntime.ReadPolicySnapshot(ctx, o.ControlRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := policy.Fields["setupState"]
+	if !ok {
+		t.Fatal("setup.Apply did not persist setupState ownership")
+	}
+	var owner ownership
+	if err := json.Unmarshal(raw, &owner); err != nil {
+		t.Fatal(err)
+	}
+	state, err := openChild(root, "state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = state.Close() }()
+	currentVolume, err := volumeID(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentVolume == "" || owner.Volume != currentVolume || currentVolume != parentVolume {
+		t.Fatalf("persisted Btrfs subvolume evidence differs: marker=%q current=%q parent=%q", owner.Volume, currentVolume, parentVolume)
+	}
+	if err := matches(state, root, owner.DirectoryID, owner.Volume); err != nil {
+		t.Fatalf("exact preflight identity refused after Apply: %v", err)
+	}
+
+	// A reboot may change st_dev while preserving the same directory inode and
+	// subvolume UUID. Exercise that exact persisted-marker path without needing
+	// privileged device remounting inside the hosted runner.
+	_, inode, ok := strings.Cut(owner.DirectoryID, ":")
+	if !ok || inode == "" {
+		t.Fatalf("invalid stored directory identity %q", owner.DirectoryID)
+	}
+	renumbered := "999999:" + inode
+	if err := inspectPersistedStateIdentity(o.ControlRoot, "state", renumbered, owner.Volume); err != nil {
+		t.Fatalf("production read-only preflight refused the same Btrfs subvolume after device renumber: %v", err)
+	}
+	if err := inspectPersistedStateIdentity(o.ControlRoot, "state", renumbered, owner.Volume+":other"); err == nil {
+		t.Fatal("preflight accepted a different recorded Btrfs subvolume")
+	}
+
+	// Re-run the ordinary preflight using the newly committed generation and
+	// the exact canonical configuration bytes; this is the same validation
+	// that /init performs before the activation stage.
+	request.ExpectedGeneration = applied.Generation
+	prepared, err := os.ReadFile(o.GlobalConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Inspect(ctx, o, request, prepared); err != nil {
+		t.Fatalf("production read-only setup preflight after Apply: %v", err)
+	}
+}
