@@ -23,24 +23,24 @@ type btrfsTimespec struct {
 }
 
 type btrfsSubvolInfo struct {
-	TreeID      uint64
-	Name        [256]byte // BTRFS_VOL_NAME_MAX + 1
-	ParentID    uint64
-	DirID       uint64
-	Generation  uint64
-	Flags       uint64
-	UUID        [16]byte
-	ParentUUID  [16]byte
+	TreeID       uint64
+	Name         [256]byte // BTRFS_VOL_NAME_MAX + 1
+	ParentID     uint64
+	DirID        uint64
+	Generation   uint64
+	Flags        uint64
+	UUID         [16]byte
+	ParentUUID   [16]byte
 	ReceivedUUID [16]byte
-	CTransID    uint64
-	OTransID    uint64
-	STransID    uint64
-	RTransID    uint64
-	CTime       btrfsTimespec
-	OTime       btrfsTimespec
-	STime       btrfsTimespec
-	RTime       btrfsTimespec
-	Reserved    [8]uint64
+	CTransID     uint64
+	OTransID     uint64
+	STransID     uint64
+	RTransID     uint64
+	CTime        btrfsTimespec
+	OTime        btrfsTimespec
+	STime        btrfsTimespec
+	RTime        btrfsTimespec
+	Reserved     [8]uint64
 }
 
 // Catch UAPI layout drift before issuing the ioctl.
