@@ -32,10 +32,17 @@ jobs:
           GOWORK: 'off'
         run: |
           set -euo pipefail
-          go get "github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins@$UAP_CANDIDATE_SHA"
+          module=github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins
+          # This nested module has no Go package at its root. Resolve the
+          # module itself rather than asking go get to find a root package.
+          version="$(go mod download -json "$module@$UAP_CANDIDATE_SHA" | jq -er --arg module "$module" 'select(.Path == $module) | .Version')"
+          [[ "$version" == *"-${UAP_CANDIDATE_SHA:0:12}" ]]
+          go mod edit "-require=$module@$version"
           go mod tidy
           go mod verify
-          go list -m github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins
+          selected="$(go list -m -f '{{.Version}}' "$module")"
+          test "$selected" = "$version"
+          go list -m "$module"
       - name: Install real Claude Code 2.1.332 in disposable runner profile
         shell: bash
         run: |
