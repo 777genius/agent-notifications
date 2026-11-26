@@ -14,8 +14,8 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/claude"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 
-	"github.com/777genius/agent-notifications/internal/installruntime"
 	notifysetup "github.com/777genius/agent-notifications/internal/agentnotify/setup"
+	"github.com/777genius/agent-notifications/internal/installruntime"
 )
 
 // This test is opt-in in the generic suite, but the dedicated native CI lane
