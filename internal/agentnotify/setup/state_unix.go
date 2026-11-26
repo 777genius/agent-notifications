@@ -310,14 +310,14 @@ func matches(f, parent *os.File, want, volume string) error {
 		return e
 	}
 	if volume == "" {
-		// On Btrfs even an exact dev:ino match cannot distinguish a legacy
-		// marker from a snapshot that acquired a recycled device number.
-		// Never infer durable volume evidence from the candidate directory.
-		if current != "" {
-			return fmt.Errorf("missing recorded btrfs volume; preserve state for verified recovery")
-		}
+		// Legacy markers have no durable Btrfs subvolume evidence. Preserve
+		// compatibility only for their exact original dev:ino identity; never
+		// infer a new volume or relax the device check after a renumber.
 		if match {
 			return nil
+		}
+		if current != "" {
+			return fmt.Errorf("owned directory identity changed; legacy marker has no recorded btrfs volume")
 		}
 		return fmt.Errorf("owned directory identity changed (no recorded volume)")
 	}
