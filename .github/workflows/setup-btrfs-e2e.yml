@@ -41,14 +41,15 @@ jobs:
           mkfs.btrfs -f -q "$image"
           mkdir -p "$mountpoint"
           sudo mount -t btrfs -o loop,user_subvol_rm_allowed "$image" "$mountpoint"
+          printf 'BTRFS_MOUNT=%s\n' "$mountpoint" >> "$GITHUB_ENV"
+          printf 'BTRFS_TEST_TMPDIR=%s\n' "$mountpoint/test-tmp" >> "$GITHUB_ENV"
           sudo btrfs subvolume create "$mountpoint/test-tmp"
           sudo chown "$(id -u):$(id -g)" "$mountpoint/test-tmp"
-          printf 'BTRFS_TEST_TMPDIR=%s\n' "$mountpoint/test-tmp" >> "$GITHUB_ENV"
-          printf 'BTRFS_MOUNT=%s\n' "$mountpoint" >> "$GITHUB_ENV"
       - name: Verify real subvolume and snapshot identity (no skips)
         shell: bash
         run: |
           set -euo pipefail
+          test "$(id -u)" -ne 0
           export TMPDIR="$BTRFS_TEST_TMPDIR"
           go test -json ./internal/agentnotify/setup \
             -run '^TestSetupState(SurvivesBtrfsRenumberOnlyOnRecordedVolume|RefusesBtrfsSnapshotWithSameInode)$' \
@@ -76,10 +77,10 @@ jobs:
         if: always()
         shell: bash
         run: |
-          if [ -n "${BTRFS_TEST_TMPDIR:-}" ] && mountpoint -q "${BTRFS_MOUNT:-/nonexistent}"; then
-            sudo btrfs subvolume delete "$BTRFS_TEST_TMPDIR"
-          fi
           if [ -n "${BTRFS_MOUNT:-}" ] && mountpoint -q "$BTRFS_MOUNT"; then
+            if [ -n "${BTRFS_TEST_TMPDIR:-}" ] && sudo btrfs subvolume show "$BTRFS_TEST_TMPDIR" >/dev/null 2>&1; then
+              sudo btrfs subvolume delete "$BTRFS_TEST_TMPDIR"
+            fi
             sudo umount "$BTRFS_MOUNT"
           fi
           rm -f "$RUNNER_TEMP/setup-btrfs.img"
