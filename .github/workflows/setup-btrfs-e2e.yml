@@ -52,7 +52,39 @@ jobs:
           test "$(id -u)" -ne 0
           export TMPDIR="$BTRFS_TEST_TMPDIR"
           go test -json ./internal/agentnotify/setup \
-            -run '^TestSetupState(SurvivesBtrfsRenumberOnlyOnRecordedVolume|RefusesBtrfsSnapshotWithSameInode)$' \
+            -run '^(TestSetupState(SurvivesBtrfsRenumberOnlyOnRecordedVolume|RefusesBtrfsSnapshotWithSameInode)|TestSetupApplyPersistsBtrfsSubvolumeIdentityForPreflight)            -count=1 -timeout=8m > "$RUNNER_TEMP/btrfs-tests.json"
+          python3 -B - <<'PY'
+          import json, os
+          path = os.path.join(os.environ["RUNNER_TEMP"], "btrfs-tests.json")
+          wanted = {
+              "TestSetupStateSurvivesBtrfsRenumberOnlyOnRecordedVolume",
+              "TestSetupStateRefusesBtrfsSnapshotWithSameInode",
+              "TestSetupApplyPersistsBtrfsSubvolumeIdentityForPreflight",
+          }
+          passed, skipped = set(), set()
+          with open(path, encoding="utf-8") as stream:
+              for line in stream:
+                  row = json.loads(line)
+                  test, action = row.get("Test"), row.get("Action")
+                  if test in wanted and action == "pass":
+                      passed.add(test)
+                  if test in wanted and action == "skip":
+                      skipped.add(test)
+          assert passed == wanted and not skipped, f"real Btrfs checks incomplete: passed={passed}, skipped={skipped}"
+          print("PASS: exact Btrfs snapshot and renumber regression tests")
+          PY
+      - name: Unmount disposable Btrfs volume
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${BTRFS_MOUNT:-}" ] && mountpoint -q "$BTRFS_MOUNT"; then
+            if [ -n "${BTRFS_TEST_TMPDIR:-}" ] && sudo btrfs subvolume show "$BTRFS_TEST_TMPDIR" >/dev/null 2>&1; then
+              sudo btrfs subvolume delete "$BTRFS_TEST_TMPDIR"
+            fi
+            sudo umount "$BTRFS_MOUNT"
+          fi
+          rm -f "$RUNNER_TEMP/setup-btrfs.img"
+ \
             -count=1 -timeout=8m > "$RUNNER_TEMP/btrfs-tests.json"
           python3 -B - <<'PY'
           import json, os
