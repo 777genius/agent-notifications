@@ -1,0 +1,69 @@
+name: Candidate UAP Claude 2.1.332 E2E
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/claude-uap-candidate-e2e.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    if: github.event.pull_request.number == 694
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Resolve candidate library with official Go module checksums
+        shell: bash
+        env:
+          UAP_CANDIDATE_SHA: 1b624328ec859470f75dadaaeca8510194a9bd1d
+          GOWORK: 'off'
+        run: |
+          set -euo pipefail
+          go get "github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins@$UAP_CANDIDATE_SHA"
+          go mod tidy
+          go mod verify
+          go list -m github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins
+      - name: Install real Claude Code 2.1.332 in disposable runner profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d "$RUNNER_TEMP/TEST-claude-uap-XXXXXX")"
+          mkdir -m 0700 "$root/home" "$root/xdg-config"
+          printf 'CLAUDE_UAP_CANDIDATE_ROOT=%s\n' "$root" >> "$GITHUB_ENV"
+          npm_config_cache="$root/npm-cache" npm --prefix "$root" install --ignore-scripts --no-audit --no-fund --no-save @anthropic-ai/claude-code@2.1.332
+          node "$root/node_modules/@anthropic-ai/claude-code/install.cjs"
+          "$root/node_modules/.bin/claude" --version | grep -Fq '2.1.332'
+      - name: Real UAP candidate native installation, inspect and uninstall
+        shell: bash
+        env:
+          GOWORK: 'off'
+          DISABLE_AUTOUPDATER: '1'
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+        run: |
+          set -euo pipefail
+          executable="$(realpath "$CLAUDE_UAP_CANDIDATE_ROOT/node_modules/.bin/claude")"
+          test -f "$executable"
+          AGENT_NOTIFY_CLAUDE_NATIVE_EXE="$executable" \
+            go test -race ./internal/agentnotify/setupwizard \
+            -run '^TestWizardClaudeNativeSkillsDirLifecycleE2E$' -count=1 -v -timeout=4m
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: uap-candidate-go-dependency-proof
+          path: |
+            go.mod
+            go.sum
+          if-no-files-found: error
