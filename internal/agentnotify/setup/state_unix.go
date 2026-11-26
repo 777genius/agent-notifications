@@ -306,14 +306,14 @@ func matches(f, parent *os.File, want, volume string) error {
 	}
 	match := installruntime.MatchPersistedDirectory(want, id, fmt.Sprintf("%d", parentStat.Dev))
 	if volume == "" {
-		// Legacy markers have no durable Btrfs subvolume evidence. Preserve
-		// compatibility only for their exact original dev:ino identity; never
-		// infer a new volume or relax the device check after a renumber. Avoid
-		// the newer ioctl entirely so old kernels retain exact-match support.
+		// No durable Btrfs subvolume identity was recorded or is available.
+		// Keep the platform's existing matcher: Linux remains exact-only,
+		// while Darwin retains its separate parent-device-bound renumber rule.
+		// Never infer Btrfs evidence from the current path or ioctl result.
 		if match {
 			return nil
 		}
-		return fmt.Errorf("owned directory identity changed; legacy marker has no recorded btrfs volume")
+		return fmt.Errorf("owned directory identity changed; no recorded volume identity")
 	}
 	current, e := volumeID(f)
 	if e != nil {
