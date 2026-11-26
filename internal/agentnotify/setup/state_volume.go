@@ -7,9 +7,10 @@ import (
 	"strings"
 )
 
-// A recorded volume lets the setup state directory survive st_dev renumbering:
-// same inode on the same subvolume. Legacy markers without a volume remain
-// compatible only when the original device and inode still match exactly.
+// A recorded Btrfs subvolume identity lets this setup-state directory survive
+// st_dev renumbering only when its inode and subvolume UUID/ID still match.
+// Without that evidence, matches keeps the platform's pre-existing policy
+// (strict exact identity on Linux; Darwin's separate parent-device-bound rule).
 func renumberedOnVolume(want, current, volume, currentVolume string) bool {
 	if volume == "" || volume != currentVolume {
 		return false
