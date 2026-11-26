@@ -40,11 +40,16 @@ func TestPersistedIdentitySetupOwnership(t *testing.T) {
 	if strings.HasPrefix(id, "999999:") {
 		stored = "888888:" + ino
 	}
-	err = matches(state, root, stored, "")
-	if (err == nil) != (runtime.GOOS == "darwin") {
+	volume, err := volumeID(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renumberAllowed := runtime.GOOS == "darwin" || volume != ""
+	err = matches(state, root, stored, volume)
+	if (err == nil) != renumberAllowed {
 		t.Fatalf("%s persisted setup identity: %v", runtime.GOOS, err)
 	}
-	if err = matches(state, root, id, ""); err != nil {
+	if err = matches(state, root, id, volume); err != nil {
 		t.Fatal(err)
 	}
 	// Build only the structural evidence consumed by checkProvisioned. No
@@ -72,10 +77,10 @@ func TestPersistedIdentitySetupOwnership(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	owner, _ := json.Marshal(ownership{Phase: "ready", DirectoryID: stored, Namespace: "namespace"})
+	owner, _ := json.Marshal(ownership{Phase: "ready", DirectoryID: stored, Namespace: "namespace", Volume: volume})
 	snapshot := installruntime.PolicySnapshot{Fields: map[string]json.RawMessage{"setupState": owner}}
 	err = checkProvisioned(Options{ControlRoot: rootPath}, snapshot)
-	if (err == nil) != (runtime.GOOS == "darwin") {
+	if (err == nil) != renumberAllowed {
 		t.Fatalf("%s ready marker: %v", runtime.GOOS, err)
 	}
 	if err = state.Close(); err != nil {
@@ -89,7 +94,7 @@ func TestPersistedIdentitySetupOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = replacement.Close() }()
-	if matches(replacement, root, stored, "") == nil {
+	if matches(replacement, root, stored, volume) == nil {
 		t.Fatal("replacement setup state accepted")
 	}
 }

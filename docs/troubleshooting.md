@@ -62,11 +62,11 @@ bind the directory to the filesystem UUID **and** the Btrfs subvolume ID, so
 normal reboot renumbering remains valid without accepting another snapshot
 (which can contain identical inode numbers and journal data).
 
-**Existing records written before this fix have no recorded subvolume ID.**
-If their device number has already changed, there is no trustworthy evidence
-to tell the original directory from a substituted snapshot. The installer
-therefore reports `initialization_recovery_required` rather than silently
-claiming the old state. Preserve the existing control directory and policy;
+**Existing Btrfs records written before this fix have no recorded subvolume ID.**
+Even if the device and inode numbers still match, a snapshot could have
+inherited the inode and a recycled device number. The installer therefore
+reports `initialization_recovery_required` rather than silently claiming the
+old state. Preserve the existing control directory and policy;
 do not delete, overwrite, or manually rewrite `setupState` or the journal.
 Use the read-only inspection commands above and arrange explicit verified
 recovery. A kernel/device renumber alone is **not** sufficient proof for

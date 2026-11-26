@@ -305,17 +305,21 @@ func matches(f, parent *os.File, want, volume string) error {
 		return e
 	}
 	match := installruntime.MatchPersistedDirectory(want, id, fmt.Sprintf("%d", parentStat.Dev))
+	current, e := volumeID(f)
+	if e != nil {
+		return e
+	}
 	if volume == "" {
-		// Legacy and non-Btrfs markers retain the original exact/OS-specific
-		// rule. Do not invent volume evidence for a renumbered legacy record.
+		// On Btrfs even an exact dev:ino match cannot distinguish a legacy
+		// marker from a snapshot that acquired a recycled device number.
+		// Never infer durable volume evidence from the candidate directory.
+		if current != "" {
+			return fmt.Errorf("missing recorded btrfs volume; preserve state for verified recovery")
+		}
 		if match {
 			return nil
 		}
 		return fmt.Errorf("owned directory identity changed (no recorded volume)")
-	}
-	current, e := volumeID(f)
-	if e != nil {
-		return e
 	}
 	// Check the durable volume even when dev:ino happens to match: otherwise
 	// a replaced mount using colliding inode/device numbers could be adopted.
