@@ -1,4 +1,4 @@
-name: Candidate UAP Claude 2.1.332 E2E
+name: Merged UAP Claude 2.1.332 E2E
 
 on:
   pull_request:
@@ -28,7 +28,7 @@ jobs:
       - name: Resolve candidate library with official Go module checksums
         shell: bash
         env:
-          UAP_CANDIDATE_SHA: ff5f378252aed6c957718ee1b7c95215890cfcfd
+          UAP_CANDIDATE_SHA: 5c58ea4c34f91c84e7946619ce6448e789a79f23
           GOWORK: 'off'
         run: |
           set -euo pipefail
