@@ -66,11 +66,21 @@ func volumeID(f *os.File) (string, error) {
 	var info btrfsSubvolInfo
 	_, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), btrfsIOCGetSubvolInfo, uintptr(unsafe.Pointer(&info)))
 	runtime.KeepAlive(f)
+	if errno == unix.ENOTTY || errno == unix.EOPNOTSUPP {
+		// Older kernels do not expose GET_SUBVOL_INFO. Keep the installer
+		// usable, but persist no volume evidence: matching remains exact-only.
+		return "", nil
+	}
 	if errno != 0 {
 		return "", fmt.Errorf("read btrfs subvolume identity: %w", errno)
 	}
-	if info.TreeID == 0 || info.UUID == ([16]byte{}) {
-		return "", fmt.Errorf("missing persistent btrfs subvolume UUID/ID")
+	if info.TreeID == 0 {
+		return "", fmt.Errorf("missing btrfs subvolume ID")
+	}
+	if info.UUID == ([16]byte{}) {
+		// The top-level root has no independent subvolume UUID. It remains
+		// supported with the original exact dev:ino identity only.
+		return "", nil
 	}
 	return btrfsVolumeID(info.UUID, info.TreeID), nil
 }
