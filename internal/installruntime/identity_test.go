@@ -62,7 +62,7 @@ func TestPersistedAnchorChainLogic(t *testing.T) {
 }
 
 func TestPersistedIdentityPlatformPolicy(t *testing.T) {
-	relaxed := runtime.GOOS == "darwin"
+	relaxed := persistedDevRelaxed
 	if got := MatchPersistedDirectory("1:10", "2:10", "2"); got != relaxed {
 		t.Fatalf("%s policy=%v", runtime.GOOS, got)
 	}

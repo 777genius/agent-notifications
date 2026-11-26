@@ -34,8 +34,8 @@ func objectDevice(id string) string {
 
 // MatchPersistedDirectory compares a durable identity with a freshly observed
 // physical directory. Callers must reject symlinks/non-directories first and
-// supply the device of its held or no-follow observed parent. Only Darwin may
-// renumber devices, and only away from a current volume boundary.
+// supply the device of its held or no-follow observed parent. Only Darwin and
+// Linux (btrfs) may renumber devices, and only away from a current volume boundary.
 func MatchPersistedDirectory(stored, current, parentDev string) bool {
 	if !persistedDevRelaxed {
 		return stored == current
