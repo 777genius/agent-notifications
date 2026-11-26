@@ -1,0 +1,82 @@
+name: Btrfs setup ownership E2E
+
+on:
+  pull_request:
+    paths:
+      - 'internal/agentnotify/setup/state_*'
+      - '.github/workflows/setup-btrfs-e2e.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'internal/agentnotify/setup/state_*'
+      - '.github/workflows/setup-btrfs-e2e.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  btrfs-setup:
+    name: Native Btrfs subvolume/snapshot ownership
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Mount disposable Btrfs filesystem
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v mkfs.btrfs >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq btrfs-progs
+          fi
+          image="$RUNNER_TEMP/setup-btrfs.img"
+          mountpoint="$RUNNER_TEMP/setup-btrfs-mount"
+          truncate -s 256M "$image"
+          mkfs.btrfs -f -q "$image"
+          mkdir -p "$mountpoint"
+          sudo mount -t btrfs -o loop "$image" "$mountpoint"
+          sudo mkdir -m 0700 "$mountpoint/test-tmp"
+          sudo chown "$(id -u):$(id -g)" "$mountpoint/test-tmp"
+          printf 'BTRFS_TEST_TMPDIR=%s\n' "$mountpoint/test-tmp" >> "$GITHUB_ENV"
+          printf 'BTRFS_MOUNT=%s\n' "$mountpoint" >> "$GITHUB_ENV"
+      - name: Verify real subvolume and snapshot identity (no skips)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TMPDIR="$BTRFS_TEST_TMPDIR"
+          go test -json ./internal/agentnotify/setup \
+            -run '^TestSetupState(SurvivesBtrfsRenumberOnlyOnRecordedVolume|RefusesBtrfsSnapshotWithSameInode)$' \
+            -count=1 -timeout=8m > "$RUNNER_TEMP/btrfs-tests.json"
+          python3 -B - <<'PY'
+          import json, os
+          path = os.path.join(os.environ["RUNNER_TEMP"], "btrfs-tests.json")
+          wanted = {
+              "TestSetupStateSurvivesBtrfsRenumberOnlyOnRecordedVolume",
+              "TestSetupStateRefusesBtrfsSnapshotWithSameInode",
+          }
+          passed, skipped = set(), set()
+          with open(path, encoding="utf-8") as stream:
+              for line in stream:
+                  row = json.loads(line)
+                  test, action = row.get("Test"), row.get("Action")
+                  if test in wanted and action == "pass":
+                      passed.add(test)
+                  if test in wanted and action == "skip":
+                      skipped.add(test)
+          assert passed == wanted and not skipped, f"real Btrfs checks incomplete: passed={passed}, skipped={skipped}"
+          print("PASS: exact Btrfs snapshot and renumber regression tests")
+          PY
+      - name: Unmount disposable Btrfs volume
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${BTRFS_MOUNT:-}" ]; then
+            sudo umount "$BTRFS_MOUNT"
+          fi
+          rm -f "$RUNNER_TEMP/setup-btrfs.img"
