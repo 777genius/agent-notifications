@@ -8,7 +8,8 @@ import (
 )
 
 // A recorded volume lets the setup state directory survive st_dev renumbering:
-// same inode on the same subvolume. Btrfs markers without a volume are refused.
+// same inode on the same subvolume. Legacy markers without a volume remain
+// compatible only when the original device and inode still match exactly.
 func renumberedOnVolume(want, current, volume, currentVolume string) bool {
 	if volume == "" || volume != currentVolume {
 		return false
