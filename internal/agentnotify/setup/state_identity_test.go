@@ -41,7 +41,7 @@ func TestPersistedIdentitySetupOwnership(t *testing.T) {
 		stored = "888888:" + ino
 	}
 	err = matches(state, root, stored)
-	if (err == nil) != devRenumberRelaxed {
+	if (err == nil) != (runtime.GOOS == "darwin") {
 		t.Fatalf("%s persisted setup identity: %v", runtime.GOOS, err)
 	}
 	if err = matches(state, root, id); err != nil {
@@ -75,7 +75,7 @@ func TestPersistedIdentitySetupOwnership(t *testing.T) {
 	owner, _ := json.Marshal(ownership{Phase: "ready", DirectoryID: stored, Namespace: "namespace"})
 	snapshot := installruntime.PolicySnapshot{Fields: map[string]json.RawMessage{"setupState": owner}}
 	err = checkProvisioned(Options{ControlRoot: rootPath}, snapshot)
-	if (err == nil) != devRenumberRelaxed {
+	if (err == nil) != (runtime.GOOS == "darwin") {
 		t.Fatalf("%s ready marker: %v", runtime.GOOS, err)
 	}
 	if err = state.Close(); err != nil {
@@ -93,6 +93,3 @@ func TestPersistedIdentitySetupOwnership(t *testing.T) {
 		t.Fatal("replacement setup state accepted")
 	}
 }
-
-// Mirrors installruntime.persistedDevRelaxed for this linux||darwin-only file.
-const devRenumberRelaxed = true

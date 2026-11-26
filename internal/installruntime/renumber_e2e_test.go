@@ -269,8 +269,8 @@ func renumberLedger(t *testing.T, root string) Ledger {
 	return l
 }
 func TestRenumberE2ENonDarwinExactness(t *testing.T) {
-	if persistedDevRelaxed {
-		t.Skip("strict-platform exactness; Darwin/Linux relax persisted dev renumbering")
+	if runtime.GOOS == "darwin" {
+		t.Skip("non-Darwin exactness; Darwin has real renumber flows")
 	}
 	e := renumberSandbox(t)
 	l := e.install(t, e.stage(t, "A"))

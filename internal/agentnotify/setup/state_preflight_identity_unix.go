@@ -3,7 +3,7 @@
 package setup
 
 // Use the same descriptor-relative, persisted-directory identity check as the
-// setup transaction. Darwin and Linux btrfs may renumber the device after remount/reboot,
+// setup transaction. Darwin may renumber the device after remount/reboot,
 // but the parent device and persisted inode must still match.
 func inspectPersistedStateIdentity(rootPath, name, expected string) error {
 	root, err := openRoot(rootPath)

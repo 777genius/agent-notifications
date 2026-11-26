@@ -54,7 +54,7 @@ func TestPersistedIdentityFileRecoveryAnchors(t *testing.T) {
 	r.Files = nil
 	r.RecoverOnly = true
 	_, err = Commit(ctx, r)
-	if persistedDevRelaxed {
+	if runtime.GOOS == "darwin" {
 		if err != nil {
 			t.Fatal("persisted device renumber recovery rejected", err)
 		}
@@ -100,7 +100,7 @@ func TestPersistedIdentityObservedDirectory(t *testing.T) {
 		replacementDev = "888888"
 	}
 	err = checkNativeDirectoryID(path, replacementDev+":"+ino)
-	if (err == nil) != persistedDevRelaxed {
+	if (err == nil) != (runtime.GOOS == "darwin") {
 		t.Fatalf("%s observed identity policy: %v", runtime.GOOS, err)
 	}
 	// Same bytes cannot rescue an inode replacement on either platform.
