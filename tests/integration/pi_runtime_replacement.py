@@ -137,6 +137,9 @@ def exercise(root, profile, args, env, sink, *, fixture, product, command, nativ
                     "cursor_consumer_present": None,
                     "sibling_consumers_unchanged": None,
                     "cursor_profile_bytes_unchanged": None,
+                    "uap_state_readable": False,
+                    "uap_cursor_binding_present": None,
+                    "uap_native_removal_attempt_present": None,
                 }
                 try:
                     after = ledger()
@@ -153,6 +156,23 @@ def exercise(root, profile, args, env, sink, *, fixture, product, command, nativ
                 try:
                     evidence["cursor_profile_bytes_unchanged"] = cursor_files() == saved_cursor_files
                 except Exception:
+                    pass
+                # A failed host uninstall may have revoked its consumer while
+                # UAP still owns a binding (or has an unfinished native attempt).
+                # Observe only yes/no facts from this disposable test state.
+                try:
+                    state_path = root / "uap/state/state-v2.json"
+                    uap_state = json.loads(state_path.read_text(encoding="utf-8"))
+                    installations = uap_state.get("installations", [])
+                    bindings = [entry for inst in installations if isinstance(inst, dict)
+                                for entry in inst.get("clients", {}).values()
+                                if isinstance(entry, dict) and entry.get("client_id") == "cursor"]
+                    evidence["uap_state_readable"] = True
+                    evidence["uap_cursor_binding_present"] = any(
+                        item.get("materialization") != "absent" for item in bindings)
+                    evidence["uap_native_removal_attempt_present"] = any(
+                        bool(item.get("native_activation_attempt")) for item in bindings)
+                except (OSError, ValueError, TypeError, AttributeError):
                     pass
                 result["cursor_retirement_failure"] = evidence
                 raise
