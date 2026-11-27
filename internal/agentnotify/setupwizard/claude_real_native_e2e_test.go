@@ -190,40 +190,40 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 // It does not deliver notifications or respond to tool calls.
 func buildClaudeNativeMCPProbe(t *testing.T) string {
 	t.Helper()
-	return testenv.GoFixture(t, "package main\n" +
-		"\n" +
-		"import (\n" +
-		" \"encoding/json\"\n" +
-		" \"os\"\n" +
-		")\n" +
-		"\n" +
-		"func main() {\n" +
-		" dec, enc := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)\n" +
-		" for {\n" +
-		"  var req struct {\n" +
-		"   ID json.RawMessage `json:\"id\"`\n" +
-		"   Method string `json:\"method\"`\n" +
-		"   Params struct { ProtocolVersion string `json:\"protocolVersion\"` } `json:\"params\"`\n" +
-		"  }\n" +
-		"  if err := dec.Decode(&req); err != nil { return }\n" +
-		"  if len(req.ID) == 0 { continue }\n" +
-		"  resp := map[string]any{\"jsonrpc\":\"2.0\", \"id\":req.ID}\n" +
-		"  switch req.Method {\n" +
-		"  case \"initialize\":\n" +
-		"   version := req.Params.ProtocolVersion\n" +
-		"   switch version {\n" +
-		"   case \"2024-11-05\", \"2025-03-26\", \"2025-06-18\", \"2025-11-25\":\n" +
-		"   default: version = \"2025-11-25\"\n" +
-		"   }\n" +
-		"   resp[\"result\"] = map[string]any{\"protocolVersion\":version,\"capabilities\":map[string]any{\"tools\":map[string]any{}},\"serverInfo\":map[string]string{\"name\":\"TEST-agent-notify-probe\",\"version\":\"1.0.0\"}}\n" +
-		"  case \"tools/list\":\n" +
-		"   resp[\"result\"] = map[string]any{\"tools\": []any{map[string]any{\"name\":\"notification_status\",\"description\":\"Inert E2E probe\",\"inputSchema\":map[string]any{\"type\":\"object\",\"properties\":map[string]any{}}}}}\n" +
-		"  case \"ping\":\n" +
-		"   resp[\"result\"] = map[string]any{}\n" +
-		"  default:\n" +
-		"   resp[\"error\"] = map[string]any{\"code\":-32601,\"message\":\"method not supported\"}\n" +
-		"  }\n" +
-		"  if err := enc.Encode(resp); err != nil { return }\n" +
-		" }\n" +
+	return testenv.GoFixture(t, "package main\n"+
+		"\n"+
+		"import (\n"+
+		" \"encoding/json\"\n"+
+		" \"os\"\n"+
+		")\n"+
+		"\n"+
+		"func main() {\n"+
+		" dec, enc := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)\n"+
+		" for {\n"+
+		"  var req struct {\n"+
+		"   ID json.RawMessage `json:\"id\"`\n"+
+		"   Method string `json:\"method\"`\n"+
+		"   Params struct { ProtocolVersion string `json:\"protocolVersion\"` } `json:\"params\"`\n"+
+		"  }\n"+
+		"  if err := dec.Decode(&req); err != nil { return }\n"+
+		"  if len(req.ID) == 0 { continue }\n"+
+		"  resp := map[string]any{\"jsonrpc\":\"2.0\", \"id\":req.ID}\n"+
+		"  switch req.Method {\n"+
+		"  case \"initialize\":\n"+
+		"   version := req.Params.ProtocolVersion\n"+
+		"   switch version {\n"+
+		"   case \"2024-11-05\", \"2025-03-26\", \"2025-06-18\", \"2025-11-25\":\n"+
+		"   default: version = \"2025-11-25\"\n"+
+		"   }\n"+
+		"   resp[\"result\"] = map[string]any{\"protocolVersion\":version,\"capabilities\":map[string]any{\"tools\":map[string]any{}},\"serverInfo\":map[string]string{\"name\":\"TEST-agent-notify-probe\",\"version\":\"1.0.0\"}}\n"+
+		"  case \"tools/list\":\n"+
+		"   resp[\"result\"] = map[string]any{\"tools\": []any{map[string]any{\"name\":\"notification_status\",\"description\":\"Inert E2E probe\",\"inputSchema\":map[string]any{\"type\":\"object\",\"properties\":map[string]any{}}}}}\n"+
+		"  case \"ping\":\n"+
+		"   resp[\"result\"] = map[string]any{}\n"+
+		"  default:\n"+
+		"   resp[\"error\"] = map[string]any{\"code\":-32601,\"message\":\"method not supported\"}\n"+
+		"  }\n"+
+		"  if err := enc.Encode(resp); err != nil { return }\n"+
+		" }\n"+
 		"}\n")
 }
