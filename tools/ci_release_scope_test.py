@@ -181,9 +181,8 @@ class ScopeFixture(unittest.TestCase):
 
 
 class ClassifierRunnerPolicy(unittest.TestCase):
-    def test_read_only_scope_jobs_do_not_queue_on_native_pool(self):
-        # These jobs classify Git/Actions evidence, not native E2E. Maintain
-        # the exact final native matrices on their original qualified runners.
+    def test_scope_runner_routing_preserves_hosted_fallbacks(self):
+        # Keep hosted escape hatches for untrusted or explicitly rerouted PRs.
         import re
 
         root = Path(__file__).resolve().parents[1]
@@ -196,9 +195,20 @@ class ClassifierRunnerPolicy(unittest.TestCase):
                     workflow,
                 )
                 self.assertIsNotNone(scope)
-                self.assertIn('    runs-on: ubuntu-latest\n', scope.group(1))
-                self.assertNotIn('vars.CI_LINUX_RUNNER', scope.group(1))
-                self.assertIn('CI_NATIVE_WORKFLOW:', scope.group(1))
+                body = scope.group(1)
+                if name == 'ci-ubuntu.yml':
+                    route = next(line for line in body.splitlines() if line.strip().startswith('runs-on:'))
+                    fork_guard = "github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest'"
+                    label_guard = "contains(github.event.pull_request.labels.*.name, 'ci:github-hosted') && 'ubuntu-latest'"
+                    self.assertIn(fork_guard, route)
+                    self.assertIn(label_guard, route)
+                    self.assertIn("vars.CI_LINUX_RUNNER || 'ubuntu-latest'", route)
+                    self.assertLess(route.index(fork_guard), route.index('vars.CI_LINUX_RUNNER'))
+                    self.assertLess(route.index(label_guard), route.index('vars.CI_LINUX_RUNNER'))
+                else:
+                    self.assertIn('    runs-on: ubuntu-latest\n', body)
+                    self.assertNotIn('vars.CI_LINUX_RUNNER', body)
+                self.assertIn('CI_NATIVE_WORKFLOW:', body)
 
 
 
