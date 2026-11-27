@@ -145,12 +145,14 @@ def exercise(root, profile, args, env, sink, *, fixture, product, command, nativ
                     evidence["pending_mutation_present"] = after.get("PendingMutation") is not None
                     evidence["cursor_consumer_present"] = any(key in consumers_after for key in cursor_keys)
                     evidence["sibling_consumers_unchanged"] = all(
-                        consumers_after.get(key) == value for key, value in baseline.items())
-                except (OSError, ValueError, TypeError, KeyError):
+                        consumers_after.get(key) == value for key, value in expected.items())
+                except Exception:
+                    # Diagnostic collection must not replace the original
+                    # production refusal with a secondary reporting failure.
                     pass
                 try:
                     evidence["cursor_profile_bytes_unchanged"] = cursor_files() == saved_cursor_files
-                except (OSError, ValueError):
+                except Exception:
                     pass
                 result["cursor_retirement_failure"] = evidence
                 raise
