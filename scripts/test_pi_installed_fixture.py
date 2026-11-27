@@ -70,6 +70,24 @@ class ObserverTests(unittest.TestCase):
         self.assertEqual(len(diagnostic["targets"]), 8)
         self.assertNotIn("private_", P.json.dumps(diagnostic))
 
+    def test_cursor_removal_failure_classifies_only_source_backed_errors(self):
+        for prefix, code in PROCESS._CURSOR_REMOVAL_ERRORS:
+            for wrapper in ("", "persist native deactivation: ",
+                            "external deactivation failed; managed materialization was retained for repair: "):
+                with self.subTest(code=code, wrapper=wrapper):
+                    payload = {"action": "uninstall", "outcome": "incomplete", "reason": "portable_remove_failed",
+                               "targets": [{"client": "cursor", "reason": wrapper + prefix + ": TEST-private-path"},
+                                           {"client": "codex", "reason": prefix},
+                                           {"client": "cursor", "reason": "TEST-private-prefix " + prefix}]}
+                    result = subprocess.CompletedProcess([], 1, P.json.dumps(payload).encode(), b"TEST-private-stderr")
+                    diagnostic = PROCESS._command_failure(result)
+                    self.assertEqual(diagnostic["targets"][0]["cursor_removal_error"], code)
+                    self.assertNotIn("cursor_removal_error", diagnostic["targets"][1])
+                    self.assertNotIn("cursor_removal_error", diagnostic["targets"][2])
+                    self.assertNotIn("TEST-private", P.json.dumps(diagnostic))
+                    self.assertTrue(diagnostic["targets"][0]["reason_redacted"])
+        self.assertIsNone(PROCESS._cursor_removal_error({"private": "value"}))
+
     def test_native_witness_can_start_after_terminal_visibility(self):
         with tempfile.TemporaryDirectory(prefix="TEST-pi-witness-startup-") as name:
             root = Path(name)
