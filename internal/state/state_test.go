@@ -523,6 +523,50 @@ func TestManager_Cleanup_OldFiles(t *testing.T) {
 	_ = mgr.Delete(session2)
 }
 
+func TestManager_Cleanup_KeepsGhosttyTerminalIDFor24Hours(t *testing.T) {
+	mgr := newTestManager(t)
+
+	require.NoError(t, mgr.UpdateGhosttyTerminalID("with-id", "term-1"))
+	require.NoError(t, mgr.Save(&SessionState{SessionID: "without-id"}))
+	require.NoError(t, mgr.UpdateGhosttyTerminalID("with-id-ancient", "term-2"))
+
+	age := func(id string, d time.Duration) {
+		old := time.Now().Add(-d)
+		require.NoError(t, os.Chtimes(mgr.getStatePath(id), old, old))
+	}
+	age("with-id", 10*time.Minute)       // long turn: must survive the 60s sweep
+	age("without-id", 10*time.Minute)    // no ID: swept as before
+	age("with-id-ancient", 25*time.Hour) // abandoned session: swept eventually
+
+	require.NoError(t, mgr.Cleanup(60))
+
+	s, err := mgr.Load("with-id")
+	require.NoError(t, err)
+	require.NotNil(t, s, "state holding a terminal ID must survive the 60s cleanup")
+	assert.Equal(t, "term-1", s.GhosttyTerminalID)
+
+	s, _ = mgr.Load("without-id")
+	assert.Nil(t, s, "state without a terminal ID is still cleaned after maxAge")
+
+	s, _ = mgr.Load("with-id-ancient")
+	assert.Nil(t, s, "state holding a terminal ID is cleaned after the retention window")
+}
+
+func TestManager_TouchSession_RefreshesMTime(t *testing.T) {
+	mgr := newTestManager(t)
+	require.NoError(t, mgr.UpdateGhosttyTerminalID("s", "term-1"))
+	old := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(mgr.getStatePath("s"), old, old))
+
+	require.NoError(t, mgr.TouchSession("s"))
+
+	assert.Less(t, platform.FileAge(mgr.getStatePath("s")), int64(5))
+	s, err := mgr.Load("s")
+	require.NoError(t, err)
+	assert.Equal(t, "term-1", s.GhosttyTerminalID, "touch must not change content")
+	assert.NoError(t, mgr.TouchSession("missing"), "touching a missing session is a no-op")
+}
+
 func TestManager_Cleanup_EmptyDirectory(t *testing.T) {
 	mgr := newTestManager(t)
 	mgr.tempDir = t.TempDir()

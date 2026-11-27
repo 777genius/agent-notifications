@@ -95,7 +95,7 @@ Auto-detects your terminal via `TERM_PROGRAM` / `__CFBundleIdentifier`. The inst
 
 | Terminal | Focus method |
 |----------|-------------|
-| Ghostty | Exact tab focus via Ghostty AppleScript, with AXDocument retry fallback |
+| Ghostty | Exact tab focus via Ghostty AppleScript, with AXDocument retry fallback. Needs the session's Ghostty terminal ID, captured when you submit a prompt (Ghostty frontmost, tab working directory equal to the session cwd, or the repo root for `claude -w` worktrees; title not checked) and on plan/question/permission hooks (title must also contain `claude`). Without an ID the notification has no click action ("Ghostty click disabled: no verified terminal ID"), unless a tmux/zellij target was verified |
 | VS Code / Insiders / Cursor | AXTitle via focus-window subcommand |
 | iTerm2 | Exact tab/pane targeting via iTerm2 Python API when available, otherwise app-level iTerm activation |
 | Warp | Exact window/tab/pane via `WARP_FOCUS_URL` (`open warp://session/<uuid>`) when the hook ran inside Warp, with AXTitle `focus-window` fallback on older Warp. Cursor/VS Code launched from Warp keep editor focus. |

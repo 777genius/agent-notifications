@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- macOS / Ghostty: click-to-focus now works for most Claude Code notifications. The plugin only focused the exact Ghostty tab when it had captured that tab's terminal ID, and it only tried on plan, question and permission hooks, where it also required "claude" in the tab title. Claude Code now sets topic titles such as "✳ Plan a trip", so most sessions never got an ID and the click did nothing ("Ghostty click disabled: no verified terminal ID"). A new `UserPromptSubmit` hook now captures the frontmost Ghostty terminal when you submit a prompt. The tab title is not checked, but Ghostty must be frontmost and the tab's working directory must match the session's (for `claude -w` worktree sessions, the repository root). The hook never sends a notification, takes no duplicate-detection lock and only stores the terminal ID. It runs on every prompt, including on Linux and Windows, where it does nothing. The existing capture on plan, question and permission hooks is unchanged ([#114](https://github.com/777genius/agent-notifications/issues/114)).
+
 ## [1.51.5] - 2026-11-25
 
 ### Added

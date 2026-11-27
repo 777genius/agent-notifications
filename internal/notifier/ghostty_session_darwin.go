@@ -33,6 +33,18 @@ var ghosttyFrontmostTerminalInfoRunner = readGhosttyFrontmostTerminalInfo
 // Claude session when we can confidently prove the frontmost Ghostty terminal is
 // the active Claude session that emitted this hook.
 func MaybeCaptureGhosttyTerminalID(configOverride, sessionID, cwd string) {
+	captureGhosttyTerminalID(configOverride, sessionID, cwd, true)
+}
+
+// MaybeCaptureGhosttyTerminalIDOnPrompt is the UserPromptSubmit variant. The
+// user just typed into the frontmost terminal, so it does not require "claude"
+// in the title (Claude Code sets topic titles such as "✳ Plan a trip"). The
+// frontmost, terminal ID and working directory checks still apply.
+func MaybeCaptureGhosttyTerminalIDOnPrompt(configOverride, sessionID, cwd string) {
+	captureGhosttyTerminalID(configOverride, sessionID, cwd, false)
+}
+
+func captureGhosttyTerminalID(configOverride, sessionID, cwd string, requireClaudeTitle bool) {
 	if sessionID == "" || cwd == "" {
 		return
 	}
@@ -45,8 +57,17 @@ func MaybeCaptureGhosttyTerminalID(configOverride, sessionID, cwd string) {
 		logging.Debug("Ghostty terminal capture skipped: %v", err)
 		return
 	}
-	if !ghosttyFrontmostTerminalMatchesSession(info, cwd) {
+	if !ghosttyTerminalMatchesSessionCWD(info, cwd, requireClaudeTitle) {
 		logging.Debug("Ghostty terminal capture skipped: frontmost terminal did not match session cwd=%q name=%q dir=%q", cwd, info.Name, info.WorkingDirectory)
+		return
+	}
+	// Prompt-time capture runs on every prompt; when the stored ID is already
+	// current, only refresh the file's mtime (no rewrite) so age-based cleanup
+	// treats the session as live.
+	if !requireClaudeTitle && loadStoredGhosttyTerminalID(sessionID) == info.ID {
+		if err := state.NewManager().TouchSession(sessionID); err != nil {
+			logging.Warn("Failed to refresh Ghostty state for session %s: %v", sessionID, err)
+		}
 		return
 	}
 
@@ -71,6 +92,13 @@ func loadStoredGhosttyTerminalID(sessionID string) string {
 }
 
 func ghosttyFrontmostTerminalMatchesSession(info ghosttyFrontmostTerminalInfo, cwd string) bool {
+	return ghosttyTerminalMatchesSessionCWD(info, cwd, true)
+}
+
+// ghosttyTerminalMatchesSessionCWD reports whether the frontmost terminal
+// belongs to the session. With requireClaudeTitle false (prompt-time capture)
+// the title is ignored and a worktree session matches on the repo root alone.
+func ghosttyTerminalMatchesSessionCWD(info ghosttyFrontmostTerminalInfo, cwd string, requireClaudeTitle bool) bool {
 	if strings.TrimSpace(info.ID) == "" {
 		return false
 	}
@@ -81,7 +109,7 @@ func ghosttyFrontmostTerminalMatchesSession(info ghosttyFrontmostTerminalInfo, c
 	}
 
 	lowerName := strings.ToLower(strings.TrimSpace(info.Name))
-	if !strings.Contains(lowerName, "claude") {
+	if requireClaudeTitle && !strings.Contains(lowerName, "claude") {
 		return false
 	}
 
@@ -97,6 +125,9 @@ func ghosttyFrontmostTerminalMatchesSession(info ghosttyFrontmostTerminalInfo, c
 	}
 	if normalizedTermDir != worktreeCtx.RepoRoot {
 		return false
+	}
+	if !requireClaudeTitle {
+		return true
 	}
 
 	return ghosttyTerminalNameMatchesWorktree(lowerName, worktreeCtx.WorktreeName)

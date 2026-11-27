@@ -86,6 +86,7 @@ type sdkObservation struct {
 	stopCalled           bool
 	subagentStopCalled   bool
 	teammateIdleCalled   bool
+	userPromptCalled     bool
 	sessionID            string
 	cwd                  string
 	transcriptPath       string
@@ -180,6 +181,16 @@ func decodeWithIO(ctx context.Context, hookEvent string, input io.Reader) (hooks
 		observed.teammateName = event.TeammateName
 		return nil
 	})
+	// The prompt text never enters the SDK envelope (see marshalSDKEnvelope),
+	// and a nil response keeps the SDK decision neutral inside sdkIO.
+	registrar.OnUserPromptSubmit(func(event *claude.UserPromptEvent) *claude.UserPromptResponse {
+		observed.userPromptCalled = true
+		observed.sessionID = event.SessionID
+		observed.cwd = event.CWD
+		observed.transcriptPath = event.TranscriptPath
+		observed.hookEventName = event.HookEventName
+		return nil
+	})
 
 	if code := app.RunContext(ctx); code != 0 {
 		return hooks.Event{}, sdkIO, fmt.Errorf("sdk dispatch for %s failed: exit %d", hookEvent, code)
@@ -217,6 +228,8 @@ func decodeWithIO(ctx context.Context, hookEvent string, input io.Reader) (hooks
 			TeamName:     restoreString(observed.teamName, wire.TeamName, restored),
 			TeammateName: restoreString(observed.teammateName, wire.TeammateName, restored),
 		}
+	case "UserPromptSubmit":
+		event.Payload = hooks.UserPromptSubmitPayload{}
 	}
 
 	if err := hooks.ValidateEvent(event); err != nil {
@@ -253,7 +266,7 @@ func skipUTF8BOM(input io.Reader) io.Reader {
 
 func knownEvent(event string) bool {
 	switch event {
-	case "PreToolUse", "Notification", "Stop", "SubagentStop", "TeammateIdle":
+	case "PreToolUse", "Notification", "Stop", "SubagentStop", "TeammateIdle", "UserPromptSubmit":
 		return true
 	default:
 		return false
@@ -272,6 +285,8 @@ func callbackCalled(observed *sdkObservation, event string) bool {
 		return observed.subagentStopCalled
 	case "TeammateIdle":
 		return observed.teammateIdleCalled
+	case "UserPromptSubmit":
+		return observed.userPromptCalled
 	default:
 		return false
 	}

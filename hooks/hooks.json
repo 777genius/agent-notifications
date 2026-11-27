@@ -81,6 +81,22 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/bin/hook-wrapper.sh",
+              "handle-hook",
+              "UserPromptSubmit"
+            ],
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }

@@ -73,6 +73,13 @@ func newWindowsHookSettings(exePath string) hookSettings {
 					Hooks: []hookCommand{newExecHook(exePath, "TeammateIdle")},
 				},
 			},
+			// Ghostty capture is macOS-only, so this is a no-op on Windows. It is
+			// still listed so prepareRuntimeHooks replaces the shipped sh handler.
+			"UserPromptSubmit": {
+				{
+					Hooks: []hookCommand{newExecHook(exePath, "UserPromptSubmit")},
+				},
+			},
 		},
 	}
 }

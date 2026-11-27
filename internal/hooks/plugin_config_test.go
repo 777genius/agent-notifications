@@ -49,11 +49,12 @@ func TestPluginHooksUseExecFormWrapper(t *testing.T) {
 	}
 
 	expected := map[string]string{
-		"PreToolUse":   "PreToolUse",
-		"Notification": "Notification",
-		"Stop":         "Stop",
-		"SubagentStop": "SubagentStop",
-		"TeammateIdle": "TeammateIdle",
+		"PreToolUse":       "PreToolUse",
+		"Notification":     "Notification",
+		"Stop":             "Stop",
+		"SubagentStop":     "SubagentStop",
+		"TeammateIdle":     "TeammateIdle",
+		"UserPromptSubmit": "UserPromptSubmit",
 	}
 
 	for hookEvent, expectedArg := range expected {

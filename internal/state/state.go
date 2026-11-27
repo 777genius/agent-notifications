@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/777genius/agent-notifications/internal/analyzer"
 	"github.com/777genius/agent-notifications/internal/platform"
@@ -192,9 +193,54 @@ func (m *Manager) UpdateState(sessionID string, status analyzer.Status, toolName
 	return nil
 }
 
-// Cleanup cleans up old state files (older than maxAge seconds)
+// ghosttyTerminalIDRetention is how long a state file holding a captured
+// Ghostty terminal ID survives cleanup. The ID is captured at prompt time but
+// consumed when a notification fires at the end of the turn, and any session's
+// Stop hook runs Cleanup, so the normal short maxAge would delete it mid-turn.
+const ghosttyTerminalIDRetention int64 = 24 * 60 * 60
+
+// Cleanup cleans up old state files (older than maxAge seconds). Files that
+// hold a Ghostty terminal ID are kept for ghosttyTerminalIDRetention instead.
 func (m *Manager) Cleanup(maxAge int64) error {
-	return platform.CleanupOldFiles(m.tempDir, "claude-session-state-*.json", maxAge)
+	matches, err := filepath.Glob(filepath.Join(m.tempDir, "claude-session-state-*.json"))
+	if err != nil {
+		return err
+	}
+	for _, path := range matches {
+		age := platform.FileAge(path)
+		if age < 0 || age <= maxAge {
+			continue
+		}
+		if age <= ghosttyTerminalIDRetention && stateFileHasGhosttyTerminalID(path) {
+			continue
+		}
+		_ = os.Remove(path) // Ignore errors
+	}
+	return nil
+}
+
+func stateFileHasGhosttyTerminalID(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var s SessionState
+	if err := json.Unmarshal(data, &s); err != nil {
+		return false
+	}
+	return s.GhosttyTerminalID != ""
+}
+
+// TouchSession refreshes the mtime of a session's state file without changing
+// its content, so age-based cleanup treats the session as live. Missing files
+// are ignored.
+func (m *Manager) TouchSession(sessionID string) error {
+	now := time.Now()
+	err := os.Chtimes(m.getStatePath(sessionID), now, now)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // UpdateLastNotification updates the last notification timestamp, status, and message

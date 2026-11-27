@@ -35,7 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 BASE = "5a33c8f75e1f323dcd43bd83623db22032bad239"
-EVENTS = ("PreToolUse", "Notification", "Stop", "SubagentStop", "TeammateIdle")
+EVENTS = ("PreToolUse", "Notification", "Stop", "SubagentStop", "TeammateIdle", "UserPromptSubmit")
 MODULE = "github.com/777genius/agent-notifications/cmd/claude-notifications"
 PLACEHOLDER = "agent-notifications-sdk-placeholder"
 

@@ -62,6 +62,8 @@ func (ClaudeSource) Decode(_ context.Context, hookEvent string, input io.Reader)
 			TeamName:     wire.TeamName,
 			TeammateName: wire.TeammateName,
 		}
+	case "UserPromptSubmit":
+		ev.Payload = UserPromptSubmitPayload{}
 	default:
 		// Unknown event: leave Payload nil so the router reports the legacy
 		// "unknown hook event" error in its original position.
