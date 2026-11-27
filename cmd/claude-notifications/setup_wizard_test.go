@@ -3400,6 +3400,34 @@ func main() {
 	// Only the explicitly named Codex fixture uses its qualified object shape.
 	// The shared Claude probe and its array listing retain their existing path.
 	if filepath.Base(os.Args[0]) == "TEST-wizard-codex" { codex(); return }
+	// The synthetic Claude client only attests the two known local fixture
+	// selectors after finding exactly one installed matching manifest and
+	// its projected stdio server. This is not native CLI evidence.
+	if len(os.Args) == 4 && os.Args[1] == "mcp" && os.Args[2] == "get" {
+		selector := os.Args[3]
+		server, ok := strings.CutPrefix(selector, "plugin:agent-notify:")
+		if !ok || (server != "agent-notify" && server != "agent-notifications") { os.Exit(99) }
+		root := os.Getenv("CLAUDE_CONFIG_DIR")
+		if root == "" { os.Exit(98) }
+		paths, err := filepath.Glob(filepath.Join(root, "skills", "*", ".claude-plugin", "plugin.json"))
+		if err != nil { os.Exit(98) }
+		matches := []string{}
+		for _, path := range paths {
+			body, err := os.ReadFile(path)
+			var manifest map[string]any
+			if err != nil || json.Unmarshal(body, &manifest) != nil { os.Exit(98) }
+			if manifest["name"] == "agent-notify" { matches = append(matches, filepath.Dir(filepath.Dir(path))) }
+		}
+		if len(matches) != 1 { os.Exit(98) }
+		body, err := os.ReadFile(filepath.Join(matches[0], ".mcp.json"))
+		var servers map[string]map[string]any
+		if err != nil || json.Unmarshal(body, &servers) != nil { os.Exit(98) }
+		entry := servers[server]
+		command, ok := entry["command"].(string)
+		if _, remote := entry["url"]; remote || !ok || strings.TrimSpace(command) == "" || (entry["type"] != nil && entry["type"] != "stdio") { os.Exit(98) }
+		os.Stdout.WriteString(selector + ":\n  Scope: Dynamic config (from command line)\n  Status: ✔ Connected\n  Type: stdio\n")
+		return
+	}
 	if strings.Join(os.Args[1:], " ") == "plugin list --json" {
 		root := os.Getenv("CLAUDE_CONFIG_DIR")
 		listed := []map[string]any{}
