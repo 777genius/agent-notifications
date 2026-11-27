@@ -1117,7 +1117,7 @@ func (f *bootstrapFixture) releaseAssets() {
 	curlText := strings.Replace(string(curl), " # Fixture asset extensions", " https://TEST.invalid/source/0123456789abcdef0123456789abcdef01234567.tar.gz) cp "+shellQuote(source)+" \"$out\" ;;\n https://TEST.invalid/releases/download/v"+version+"/"+filepath.Base(archive)+") cp "+shellQuote(archive)+" \"$out\" ;;", 1)
 	f.write(curlPath, []byte(curlText), 0700)
 	f.env = append(f.env, "BOOTSTRAP_SOURCE_BASE_URL=https://TEST.invalid/source", "AGENT_NOTIFICATIONS_CONFIG="+filepath.Join(f.home, "config", "TEST-global.json"))
-	// The fixture agent accepts only the install/list protocol. It never runs an
+	// The fixture agent accepts install/list and the exact local MCP probe. It never runs an
 	// interactive session, network, auth or notification. Unexpected argv aborts.
 	stub := `#!/usr/bin/env python3
 import os, sys, json, pathlib, shutil
@@ -1150,6 +1150,14 @@ elif args==['plugin','list','--json']:
   manifest=json.loads(path.read_text()); name=manifest['name']
   rows.append({'id':name+'@skills-dir','version':manifest['version'],'scope':'user','enabled':True,'installPath':str(path.parent.parent)})
  print(json.dumps(rows))
+elif args==['mcp','get','plugin:agent-notify:agent-notifications']:
+ matches=[]
+ for path in sorted((root/'skills').glob('*/.claude-plugin/plugin.json')):
+  if json.loads(path.read_text()).get('name')=='agent-notify': matches.append(path.parent.parent)
+ if len(matches)!=1: sys.exit(1)
+ server=json.loads((matches[0]/'.mcp.json').read_text()).get('agent-notifications',{})
+ if not isinstance(server,dict) or server.get('type','stdio')!='stdio' or not isinstance(server.get('command'),str) or not server['command'].strip() or 'url' in server: sys.exit(1)
+ print(args[2]+':\n  Scope: Dynamic config (from command line)\n  Status: ✔ Connected\n  Type: stdio')
 else:
  (project/'unexpected-agent-call').write_text(json.dumps(args))
  sys.exit(99)
