@@ -16,6 +16,7 @@ import (
 
 	notifysetup "github.com/777genius/agent-notifications/internal/agentnotify/setup"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/testenv"
 )
 
 // This test is opt-in in the generic suite, but the dedicated native CI lane
@@ -68,7 +69,9 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 		t.Fatalf("/init policy-only configure did not persist durable setup state: result=%+v err=%v", configured, err)
 	}
 
-	probe := buildProbe(t)
+	// Unlike the generic one-shot JSON probe, this endpoint must answer the
+	// real Claude MCP handshake and remain alive until the client closes stdin.
+	probe := buildClaudeNativeMCPProbe(t)
 	pkg := filepath.Join(filepath.Dir(control), "package")
 	writePackage(t, pkg, probe)
 	scope := filepath.Join(filepath.Dir(control), "scope")
@@ -112,7 +115,7 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 		for _, binding := range installation.Clients {
 			if binding.ClientID == string(domain.ClientClaude) {
 				if binding.Activation != domain.ActivationActive || binding.Verification != domain.VerificationInstalled {
-					t.Fatalf("native client not verified: activation=%q verification=%q", binding.Activation, binding.Verification)
+					t.Fatalf("native client not verified: activation=%q verification=%q next=%+v", binding.Activation, binding.Verification, installed.NextActions)
 				}
 				managedPath = binding.TargetLocator
 			}
@@ -181,4 +184,46 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 	if got := claude.PluginStatusFromList(after, "agent-notify", managedPath); got != claude.StatusAbsent {
 		t.Fatalf("native Claude still sees removed plugin or returned an unrecognized listing: status=%d", got)
 	}
+}
+
+// Only the endpoint is inert; Claude itself performs the actual MCP discovery.
+// It does not deliver notifications or respond to tool calls.
+func buildClaudeNativeMCPProbe(t *testing.T) string {
+	t.Helper()
+	return testenv.GoFixture(t, "package main\n" +
+		"\n" +
+		"import (\n" +
+		" \"encoding/json\"\n" +
+		" \"os\"\n" +
+		")\n" +
+		"\n" +
+		"func main() {\n" +
+		" dec, enc := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)\n" +
+		" for {\n" +
+		"  var req struct {\n" +
+		"   ID json.RawMessage `json:\"id\"`\n" +
+		"   Method string `json:\"method\"`\n" +
+		"   Params struct { ProtocolVersion string `json:\"protocolVersion\"` } `json:\"params\"`\n" +
+		"  }\n" +
+		"  if err := dec.Decode(&req); err != nil { return }\n" +
+		"  if len(req.ID) == 0 { continue }\n" +
+		"  resp := map[string]any{\"jsonrpc\":\"2.0\", \"id\":req.ID}\n" +
+		"  switch req.Method {\n" +
+		"  case \"initialize\":\n" +
+		"   version := req.Params.ProtocolVersion\n" +
+		"   switch version {\n" +
+		"   case \"2024-11-05\", \"2025-03-26\", \"2025-06-18\", \"2025-11-25\":\n" +
+		"   default: version = \"2025-11-25\"\n" +
+		"   }\n" +
+		"   resp[\"result\"] = map[string]any{\"protocolVersion\":version,\"capabilities\":map[string]any{\"tools\":map[string]any{}},\"serverInfo\":map[string]string{\"name\":\"TEST-agent-notify-probe\",\"version\":\"1.0.0\"}}\n" +
+		"  case \"tools/list\":\n" +
+		"   resp[\"result\"] = map[string]any{\"tools\": []any{map[string]any{\"name\":\"notification_status\",\"description\":\"Inert E2E probe\",\"inputSchema\":map[string]any{\"type\":\"object\",\"properties\":map[string]any{}}}}}\n" +
+		"  case \"ping\":\n" +
+		"   resp[\"result\"] = map[string]any{}\n" +
+		"  default:\n" +
+		"   resp[\"error\"] = map[string]any{\"code\":-32601,\"message\":\"method not supported\"}\n" +
+		"  }\n" +
+		"  if err := enc.Encode(resp); err != nil { return }\n" +
+		" }\n" +
+		"}\n")
 }
