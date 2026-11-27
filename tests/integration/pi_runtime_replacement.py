@@ -124,7 +124,36 @@ def exercise(root, profile, args, env, sink, *, fixture, product, command, nativ
             result["cursor_preserved_during_pi_lifecycle"] = True
             expected = {key: value for key, value in consumers.items()
                         if key not in cursor_keys and key != "claude-hooks"}
-            cursor("uninstall", replacement)
+            try:
+                cursor("uninstall", replacement)
+            except RuntimeError:
+                # Preserve the original failure. Only closed boolean facts
+                # about this disposable TEST profile may enter the receipt;
+                # never copy the CLI error, argv, paths or native state bytes.
+                evidence = {
+                    "phase": "cursor-uninstall",
+                    "ledger_readable": False,
+                    "pending_mutation_present": None,
+                    "cursor_consumer_present": None,
+                    "sibling_consumers_unchanged": None,
+                    "cursor_profile_bytes_unchanged": None,
+                }
+                try:
+                    after = ledger()
+                    consumers_after = after["Consumers"]
+                    evidence["ledger_readable"] = True
+                    evidence["pending_mutation_present"] = after.get("PendingMutation") is not None
+                    evidence["cursor_consumer_present"] = any(key in consumers_after for key in cursor_keys)
+                    evidence["sibling_consumers_unchanged"] = all(
+                        consumers_after.get(key) == value for key, value in baseline.items())
+                except (OSError, ValueError, TypeError, KeyError):
+                    pass
+                try:
+                    evidence["cursor_profile_bytes_unchanged"] = cursor_files() == saved_cursor_files
+                except (OSError, ValueError):
+                    pass
+                result["cursor_retirement_failure"] = evidence
+                raise
             writer(replacement, args.replacement_runtime_stage, "claude-hooks", remove=True)
             product.require(ledger()["Consumers"] == expected,
                             "runtime_replacement_cursor_retirement_changed_existing_authority")
