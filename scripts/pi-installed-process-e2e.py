@@ -98,6 +98,9 @@ def run(args):
                                   for name in ("pi_native_fixture.py", "pi_installed_fixture.py")},
               "working_tree_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO)),
               "host_os": platform.system(), "host_architecture": platform.machine(),
+              # Fixed host metadata only: diagnose runner kernel drift without
+              # accepting an unqualified host or exposing private profile paths.
+              "host_kernel_release": platform.release()[:128],
               "candidate_binary_sha256": P.sha(args.candidate), "package_sha256": P.sha(args.package),
               "replacement_candidate_binary_sha256": P.sha(args.replacement_runtime_stage / args.candidate.name),
               "updated_package_sha256": P.sha(args.updated_package), "pi_binary_sha256": P.sha(args.pi_executable),
