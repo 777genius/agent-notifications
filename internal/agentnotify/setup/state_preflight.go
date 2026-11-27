@@ -102,7 +102,7 @@ func inspectProvisionContinuation(ctx context.Context, o Options, owner ownershi
 		}
 		// Do not open the snapshot through the commit-time structural check:
 		// the canonical read-only journal reader handles concurrent replacement.
-		if err := inspectPersistedStateIdentity(root, "state", owner.DirectoryID); err != nil {
+		if err := inspectPersistedStateIdentity(root, "state", owner.DirectoryID, owner.Volume); err != nil {
 			return fail("initialization_recovery_required",
 				fmt.Errorf("state is not the durably owned directory: %w", err))
 		}
@@ -113,9 +113,9 @@ func inspectProvisionContinuation(ctx context.Context, o Options, owner ownershi
 			fmt.Errorf("expected owned setup state is absent; preserve ownership evidence"))
 	}
 	// Use the same persisted-directory identity authority as provision.
-	// On Darwin a remount may renumber the device; comparing serialized
+	// On Darwin (or btrfs, see renumberedOnVolume) the device may renumber; comparing serialized
 	// strings directly would refuse a legitimate interrupted setup.
-	if err := inspectPersistedStateIdentity(root, stageName, owner.DirectoryID); err != nil {
+	if err := inspectPersistedStateIdentity(root, stageName, owner.DirectoryID, owner.Volume); err != nil {
 		return fail("initialization_recovery_required",
 			fmt.Errorf("provisioning stage is not the durably owned directory: %w", err))
 	}

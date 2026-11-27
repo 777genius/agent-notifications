@@ -10,7 +10,7 @@ import (
 
 // The native Windows identity is volume serial and file index. Reuse the
 // existing non-reparse, descriptor-scoped comparison used by provision.
-func inspectPersistedStateIdentity(rootPath, name, expected string) error {
+func inspectPersistedStateIdentity(rootPath, name, expected, _ string) error {
 	root, err := openRoot(rootPath)
 	if err != nil {
 		return err

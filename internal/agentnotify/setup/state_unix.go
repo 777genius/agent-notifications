@@ -29,6 +29,7 @@ type ownership struct {
 	DirectoryID    string `json:"directoryID"`
 	Phase          string `json:"phase"`
 	Namespace      string `json:"namespace"`
+	Volume         string `json:"volume,omitempty"`
 }
 
 const stageName = ".setup-state"
@@ -64,6 +65,10 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 			return s, pre, "", fail("unsafe_state", e)
 		}
 		id, e := directoryID(stage)
+		var volume string
+		if e == nil {
+			volume, e = volumeID(stage)
+		}
 		_ = stage.Close()
 		if e != nil {
 			return s, pre, "", e
@@ -75,7 +80,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 		if _, e = rand.Read(token[:]); e != nil {
 			return s, pre, "", e
 		}
-		owner = ownership{Schema: 1, InstallationID: s.Installation.Ledger.ID, Token: hex.EncodeToString(token[:]), DirectoryID: id, Phase: "started"}
+		owner = ownership{Schema: 1, InstallationID: s.Installation.Ledger.ID, Token: hex.EncodeToString(token[:]), DirectoryID: id, Volume: volume, Phase: "started"}
 		s, pre, e = recordOwner(ctx, o, s, pre, owner, result)
 		if e != nil {
 			return s, pre, "", e
@@ -89,7 +94,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 		if e != nil {
 			return s, pre, "", fail("unsafe_state", e)
 		}
-		if e = matches(stage, root, owner.DirectoryID); e != nil {
+		if e = matches(stage, root, owner.DirectoryID, owner.Volume); e != nil {
 			_ = stage.Close()
 			return s, pre, "", fail("unsafe_state", e)
 		}
@@ -132,7 +137,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 		return s, pre, "", fail("initialization_recovery_required", fmt.Errorf("expected owned state is missing or unsafe: %w", e))
 	}
 	defer func() { _ = state.Close() }()
-	if e = matches(state, root, owner.DirectoryID); e != nil {
+	if e = matches(state, root, owner.DirectoryID, owner.Volume); e != nil {
 		return s, pre, "", fail("initialization_recovery_required", e)
 	}
 	if location == "state" {
@@ -176,7 +181,7 @@ func provision(ctx context.Context, o Options, s installruntime.PolicySnapshot, 
 		if e != nil {
 			return s, pre, "", fail("unsafe_state", e)
 		}
-		e = matches(named, root, owner.DirectoryID)
+		e = matches(named, root, owner.DirectoryID, owner.Volume)
 		_ = named.Close()
 		if e != nil {
 			return s, pre, "", fail("unsafe_state", e)
@@ -290,7 +295,7 @@ func directoryID(f *os.File) (string, error) {
 	e := unix.Fstat(int(f.Fd()), &st)
 	return fmt.Sprintf("%d:%d", st.Dev, st.Ino), e
 }
-func matches(f, parent *os.File, want string) error {
+func matches(f, parent *os.File, want, volume string) error {
 	id, e := directoryID(f)
 	if e != nil {
 		return e
@@ -299,7 +304,14 @@ func matches(f, parent *os.File, want string) error {
 	if e = unix.Fstat(int(parent.Fd()), &parentStat); e != nil {
 		return e
 	}
-	if !installruntime.MatchPersistedDirectory(want, id, fmt.Sprintf("%d", parentStat.Dev)) {
+	if installruntime.MatchPersistedDirectory(want, id, fmt.Sprintf("%d", parentStat.Dev)) {
+		return nil
+	}
+	current, e := volumeID(f)
+	if e != nil {
+		return e
+	}
+	if !renumberedOnVolume(want, id, volume, current) {
 		return fmt.Errorf("owned directory identity changed")
 	}
 	return nil
@@ -351,7 +363,7 @@ func checkProvisioned(o Options, s installruntime.PolicySnapshot) error {
 		return fail("initialization_recovery_required", e)
 	}
 	defer func() { _ = state.Close() }()
-	if e = matches(state, root, owner.DirectoryID); e != nil {
+	if e = matches(state, root, owner.DirectoryID, owner.Volume); e != nil {
 		return fail("initialization_recovery_required", e)
 	}
 	j, e := openChild(state, "journal")

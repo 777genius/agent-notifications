@@ -40,11 +40,11 @@ func TestPersistedIdentitySetupOwnership(t *testing.T) {
 	if strings.HasPrefix(id, "999999:") {
 		stored = "888888:" + ino
 	}
-	err = matches(state, root, stored)
+	err = matches(state, root, stored, "")
 	if (err == nil) != (runtime.GOOS == "darwin") {
 		t.Fatalf("%s persisted setup identity: %v", runtime.GOOS, err)
 	}
-	if err = matches(state, root, id); err != nil {
+	if err = matches(state, root, id, ""); err != nil {
 		t.Fatal(err)
 	}
 	// Build only the structural evidence consumed by checkProvisioned. No
@@ -89,7 +89,7 @@ func TestPersistedIdentitySetupOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = replacement.Close() }()
-	if matches(replacement, root, stored) == nil {
+	if matches(replacement, root, stored, "") == nil {
 		t.Fatal("replacement setup state accepted")
 	}
 }
