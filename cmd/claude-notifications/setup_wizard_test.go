@@ -3397,9 +3397,11 @@ func codex() {
 	}
 }
 func main() {
-	// Only the explicitly named Codex fixture uses its qualified object shape.
-	// The shared Claude probe and its array listing retain their existing path.
-	if filepath.Base(os.Args[0]) == "TEST-wizard-codex" { codex(); return }
+	// The Codex runner admits only CODEX_HOME and an explicit profile, while
+	// Claude uses CLAUDE_CONFIG_DIR. Distinguish the actual native protocol by
+	// the sanitized child environment, even when tests share the probe binary.
+	// Do not let a generic {ok:true} response attest installed/absent plugins.
+	if filepath.Base(os.Args[0]) == "TEST-wizard-codex" || os.Getenv("CODEX_HOME") != "" { codex(); return }
 	// The synthetic Claude client only attests the two known local fixture
 	// selectors after finding exactly one installed matching manifest and
 	// its projected stdio server. This is not native CLI evidence.
