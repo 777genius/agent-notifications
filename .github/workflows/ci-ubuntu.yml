@@ -33,9 +33,8 @@ jobs:
   scope:
     if: github.event_name != 'workflow_dispatch'
     name: Classify release tooling scope
-    # Read-only, fail-open classifier: free the shared Linux native CI pool.
-    # Fork PRs already used this hosted runner; E2E remains on original VMs.
-    runs-on: ubuntu-latest
+    # Route trusted PR classifiers to the native pool; retain a hosted escape hatch.
+    runs-on: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:github-hosted') && 'ubuntu-latest' || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 50
     permissions:
       contents: read
