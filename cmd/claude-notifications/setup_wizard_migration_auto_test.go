@@ -13,6 +13,7 @@ import (
 
 	"github.com/777genius/agent-notifications/internal/agentnotify/setupwizard"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/testenv"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/ports"
 )
 
@@ -20,7 +21,10 @@ import (
 // the native Claude listing subprocess with the finite listing it would return.
 type autoMigrationListingRunner struct{ profile string }
 
-func (r autoMigrationListingRunner) Run(context.Context, ports.Command) (ports.CommandResult, error) {
+func (r autoMigrationListingRunner) Run(_ context.Context, command ports.Command) (ports.CommandResult, error) {
+	if body, handled, err := testenv.ClaudeMCPHealth(r.profile, command.Argv); handled {
+		return ports.CommandResult{Stdout: body}, err
+	}
 	paths, err := filepath.Glob(filepath.Join(r.profile, "skills", "*", ".claude-plugin", "plugin.json"))
 	if err != nil {
 		return ports.CommandResult{}, err

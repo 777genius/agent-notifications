@@ -4271,7 +4271,10 @@ type listingRunner struct {
 	configRoot string
 }
 
-func (r listingRunner) Run(_ context.Context, _ ports.Command) (ports.CommandResult, error) {
+func (r listingRunner) Run(_ context.Context, command ports.Command) (ports.CommandResult, error) {
+	if body, handled, err := testenv.ClaudeMCPHealth(r.configRoot, command.Argv); handled {
+		return ports.CommandResult{Stdout: body}, err
+	}
 	root := filepath.Join(r.configRoot, "skills")
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
