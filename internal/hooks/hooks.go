@@ -245,6 +245,12 @@ func (h *Handler) gitRepo(cwd string) string {
 	return platform.GetGitRepoNameContext(ctx, cwd)
 }
 
+// Ghostty capture seams, swapped in tests so handler tests never run osascript.
+var (
+	captureGhosttyTerminalID         = notifier.MaybeCaptureGhosttyTerminalID
+	captureGhosttyTerminalIDOnPrompt = notifier.MaybeCaptureGhosttyTerminalIDOnPrompt
+)
+
 // HandleHook handles a hook event
 func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	// Benchmark instrumentation (enabled via config debug.benchmark)
@@ -307,6 +313,20 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	logging.Debug("Hook data: session=%s, transcript=%s, tool=%s",
 		ev.Session.SessionID, ev.Session.TranscriptPath, eventToolName(ev))
 
+	// UserPromptSubmit exists only to capture the Ghostty terminal ID. It must
+	// return before any dedup lock, state write, classification or delivery,
+	// so it can never suppress or produce a notification.
+	if ev.Kind() == EventUserPromptSubmit {
+		if h.cfg.Notifications.Desktop.ClickToFocus && ev.Product == ProductClaude {
+			captureGhosttyTerminalIDOnPrompt(
+				h.cfg.Notifications.Desktop.TerminalBundleID,
+				ev.Session.SessionID,
+				ev.Session.CWD,
+			)
+		}
+		return nil
+	}
+
 	keys := h.eventKeys(ev)
 
 	// Claude-only: the Ghostty capture persists session state under the RAW
@@ -314,7 +334,7 @@ func (h *Handler) HandleHook(hookEvent string, input io.Reader) error {
 	// (doc 00 §6.1). Codex click-to-focus is not a declared feature.
 	if h.cfg.Notifications.Desktop.ClickToFocus && ev.Product == ProductClaude &&
 		(ev.Kind() == EventPreToolUse || ev.Kind() == EventNotification) {
-		notifier.MaybeCaptureGhosttyTerminalID(
+		captureGhosttyTerminalID(
 			h.cfg.Notifications.Desktop.TerminalBundleID,
 			ev.Session.SessionID,
 			ev.Session.CWD,

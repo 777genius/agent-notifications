@@ -3,6 +3,7 @@ package claudesource
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -70,7 +71,7 @@ func (r *neverEOFReader) Read(payload []byte) (int, error) {
 	select {}
 }
 
-func TestDecodeAllFiveEventsThroughTypedCallbacks(t *testing.T) {
+func TestDecodeAllEventsThroughTypedCallbacks(t *testing.T) {
 	tests := []struct {
 		name    string
 		event   string
@@ -128,6 +129,22 @@ func TestDecodeAllFiveEventsThroughTypedCallbacks(t *testing.T) {
 				payload, ok := event.Payload.(hooks.TeammateIdlePayload)
 				if !ok || payload.TeamName != "alpha" || payload.TeammateName != "bob" {
 					t.Fatalf("payload = %#v", event.Payload)
+				}
+			},
+		},
+		{
+			name:    "UserPromptSubmit",
+			event:   "UserPromptSubmit",
+			payload: `{"session_id":"session-6","cwd":"/work","transcript_path":"/transcript","hook_event_name":"UserPromptSubmit","permission_mode":"default","prompt":"secret prompt text"}`,
+			assert: func(t *testing.T, event hooks.Event) {
+				if _, ok := event.Payload.(hooks.UserPromptSubmitPayload); !ok {
+					t.Fatalf("payload = %#v", event.Payload)
+				}
+				if event.Kind() != hooks.EventUserPromptSubmit {
+					t.Fatalf("Kind() = %q", event.Kind())
+				}
+				if event.Session.SessionID != "session-6" || event.Session.CWD != "/work" {
+					t.Fatalf("session = %+v", event.Session)
 				}
 			},
 		},
@@ -472,5 +489,28 @@ func TestSkipUTF8BOMPreservesPartialPrefixes(t *testing.T) {
 				t.Fatalf("skipUTF8BOM(%q) = %q, want %q", input, got, want)
 			}
 		})
+	}
+}
+
+func TestDecodeUserPromptSubmitKeepsPromptOutOfSDKDispatch(t *testing.T) {
+	const prompt = "secret prompt text"
+	input := `{"session_id":"s","cwd":"/work","transcript_path":"/transcript","hook_event_name":"UserPromptSubmit","prompt":"` + prompt + `"}`
+	event, sdkIO, err := decodeWithIO(context.Background(), "UserPromptSubmit", strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("decodeWithIO() error = %v", err)
+	}
+	if sdkIO == nil {
+		t.Fatal("UserPromptSubmit was not dispatched through the SDK")
+	}
+	for name, value := range map[string]string{
+		"sdk payload": string(sdkIO.payload),
+		"sdk stdout":  sdkIO.stdout.String(),
+		"sdk stderr":  sdkIO.stderr.String(),
+		"session":     fmt.Sprintf("%+v", event.Session),
+		"payload":     fmt.Sprintf("%+v", event.Payload),
+	} {
+		if strings.Contains(value, prompt) {
+			t.Fatalf("%s contains the prompt text: %q", name, value)
+		}
 	}
 }

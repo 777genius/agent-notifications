@@ -29,6 +29,7 @@ const (
 	EventSubagentStop      EventKind = "subagent_stop"
 	EventPermissionRequest EventKind = "permission_request"
 	EventTeammateIdle      EventKind = "teammate_idle"
+	EventUserPromptSubmit  EventKind = "user_prompt_submit"
 )
 
 // SessionContext carries the host-neutral session identity shared by all events.
@@ -121,6 +122,11 @@ type TeammateIdlePayload struct {
 	TeammateName string
 }
 
+// UserPromptSubmitPayload is a Claude prompt submission. It only triggers the
+// Ghostty terminal capture and never produces a notification. The prompt text
+// is deliberately not carried.
+type UserPromptSubmitPayload struct{}
+
 func (StopPayload) eventKind() EventKind              { return EventStop }
 func (StopFailurePayload) eventKind() EventKind       { return EventStopFailure }
 func (SubagentStopPayload) eventKind() EventKind      { return EventSubagentStop }
@@ -128,6 +134,7 @@ func (PermissionRequestPayload) eventKind() EventKind { return EventPermissionRe
 func (PreToolUsePayload) eventKind() EventKind        { return EventPreToolUse }
 func (NotificationPayload) eventKind() EventKind      { return EventNotification }
 func (TeammateIdlePayload) eventKind() EventKind      { return EventTeammateIdle }
+func (UserPromptSubmitPayload) eventKind() EventKind  { return EventUserPromptSubmit }
 
 // EventSource decodes one host invocation into the product event contract.
 // The string argument is the validated public event name from argv.
@@ -151,6 +158,9 @@ func ValidateEvent(e Event) error {
 	}
 	if _, ok := e.Payload.(StopFailurePayload); ok && e.Product != ProductQoder {
 		return fmt.Errorf("stop failure notification only supported for Qoder")
+	}
+	if _, ok := e.Payload.(UserPromptSubmitPayload); ok && e.Product != ProductClaude {
+		return fmt.Errorf("user prompt submit only supported for Claude")
 	}
 	if p, ok := e.Payload.(SubagentStopPayload); ok {
 		if e.Product == ProductCodex && (p.Agent == nil || p.Agent.ID == "") {

@@ -33,6 +33,10 @@ func TestClaudeHookCLIAllEventsKeepWireContract(t *testing.T) {
 			event:   "TeammateIdle",
 			payload: `{"session_id":"claude-team","cwd":"/tmp/project","transcript_path":"/tmp/transcript.jsonl","hook_event_name":"TeammateIdle","team_name":"team","teammate_name":"peer"}`,
 		},
+		{
+			event:   "UserPromptSubmit",
+			payload: `{"session_id":"claude-prompt","cwd":"/tmp/project","transcript_path":"/tmp/transcript.jsonl","hook_event_name":"UserPromptSubmit","permission_mode":"default","prompt":"secret prompt text"}`,
+		},
 	}
 
 	for _, testCase := range cases {

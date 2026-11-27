@@ -147,11 +147,12 @@ func TestNewExecHookUsesArgsWithoutShell(t *testing.T) {
 func TestWindowsHookSettingsUseExecFormForAllHooks(t *testing.T) {
 	settings := newWindowsHookSettings(`C:\Tools\claude-notifications-windows-amd64.exe`)
 	expected := map[string]string{
-		"PreToolUse":   "PreToolUse",
-		"Notification": "Notification",
-		"Stop":         "Stop",
-		"SubagentStop": "SubagentStop",
-		"TeammateIdle": "TeammateIdle",
+		"PreToolUse":       "PreToolUse",
+		"Notification":     "Notification",
+		"Stop":             "Stop",
+		"SubagentStop":     "SubagentStop",
+		"TeammateIdle":     "TeammateIdle",
+		"UserPromptSubmit": "UserPromptSubmit",
 	}
 
 	for hookEvent, expectedArg := range expected {
