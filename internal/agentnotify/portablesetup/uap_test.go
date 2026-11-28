@@ -54,6 +54,9 @@ type listingRunner struct {
 }
 
 func (r listingRunner) Run(_ context.Context, command ports.Command) (ports.CommandResult, error) {
+	if body, handled, err := testenv.CodexPluginCLI(command.Env, command.Argv); handled {
+		return ports.CommandResult{Stdout: body}, err
+	}
 	if body, handled, err := testenv.ClaudeMCPHealth(r.configRoot, command.Argv); handled {
 		return ports.CommandResult{Stdout: body}, err
 	}
