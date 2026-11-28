@@ -56,10 +56,7 @@ func testCtx(t *testing.T) context.Context {
 
 func buildProbe(t *testing.T) string {
 	t.Helper()
-	return testenv.GoFixture(t, `package main
-import ("encoding/json"; "os")
-func main() { json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true}) }
-`)
+	return testenv.GoFixture(t, testenv.CodexNativeCLIProbeSource)
 }
 
 func writePackage(t *testing.T, root, probe string) {
