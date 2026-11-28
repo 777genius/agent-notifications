@@ -61,7 +61,6 @@ func (r *committedTimeoutRunner) Run(ctx context.Context, command ports.Command)
 	return listed, err
 }
 
-
 func (r *committedTimeoutRunner) RunDuplexToCompletion(ctx context.Context, command ports.Command, exchange func(io.Writer, io.Reader) error) error {
 	for _, variable := range command.Env {
 		if strings.HasPrefix(variable, "CODEX_HOME=") {
@@ -449,6 +448,11 @@ func main() {
 	root := os.Getenv("CODEX_HOME")
 	if root == "" || !filepath.IsAbs(root) { fail() }
 	args := os.Args[1:]
+	trace, err := os.OpenFile(filepath.Join(root, "TEST-trace"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil { fail() }
+	_, err = trace.WriteString(strings.Join(args, " ") + "\n")
+	closeErr := trace.Close()
+	if err != nil || closeErr != nil { fail() }
 	if len(args) == 1 && args[0] == "app-server" { serve(root); return }
 	if len(args) == 5 && args[0] == "plugin" && args[1] == "marketplace" && args[2] == "add" && args[4] == "--json" {
 		if !filepath.IsAbs(args[3]) { fail() }
