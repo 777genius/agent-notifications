@@ -2362,7 +2362,7 @@ func TestSetupWizardTTYMixedRepairPlanShowsPerBindingDigestsE2E(t *testing.T) {
 	}
 }
 
-func TestSetupWizardMixedUninstallHoldsCodexHooksE2E(t *testing.T) {
+func TestSetupWizardMixedNativeCodexUninstallRemovesHooksE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	envHome := t.TempDir()
@@ -2393,16 +2393,19 @@ func TestSetupWizardMixedUninstallHoldsCodexHooksE2E(t *testing.T) {
 		t.Fatalf("hooks.json after install: %s %v", data, err)
 	}
 	out.Reset()
-	hold := append([]string{"--action", "uninstall", "--agents", "claude,codex", "--yes", "--json"}, shared...)
-	if code := executeSetupWizardWith(ctx, hold, &out, io.Discard, strings.NewReader(""), false); code != 1 {
-		t.Fatalf("hold exit: %d %s", code, out.String())
+	remove := append([]string{"--action", "uninstall", "--agents", "claude,codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, remove, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("native Codex removal exit: %d %s", code, out.String())
 	}
-	if got := decodeWizardJSON(t, out); got.Outcome != "incomplete" || got.Reason != "external_uninstall_required" {
-		t.Fatalf("hold: %+v", got)
+	if got := decodeWizardJSON(t, out); got.Outcome != "completed" || !got.DataRetained {
+		t.Fatalf("native Codex removal: %+v", got)
 	}
-	data, err = os.ReadFile(hooks)
-	if err != nil || !strings.Contains(string(data), "codex-hook-wrapper") {
-		t.Fatalf("Codex hooks removed before attestation: %s %v", data, err)
+	if _, err = os.Stat(hooks); !os.IsNotExist(err) {
+		t.Fatalf("native Codex cleanup retained owned hooks: %v", err)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(env.control)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("native Codex cleanup retained pending intent: %+v %v", snap.Ledger, err)
 	}
 }
 
