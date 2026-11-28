@@ -3602,8 +3602,7 @@ func buildWizardProbe(t *testing.T) string {
 	return out
 }
 
-// The probe models only the fixture registry, never native Codex evidence.
-// In particular, a missing exact ID must not delete or attest a sibling.
+// The inert probe must discover only the selected installed fixture.
 func TestWizardProbeCodexDiscoveryContract(t *testing.T) {
 	probe := buildWizardProbe(t)
 	profile := t.TempDir()
@@ -3613,9 +3612,9 @@ func TestWizardProbeCodexDiscoveryContract(t *testing.T) {
 	for rel, body := range map[string]string{
 		".agents/plugins/marketplace.json": `{"name":"agentplugins-discovery"}`,
 		".codex-plugin/plugin.json":        `{"name":"agent-notify","version":"1.2.3"}`,
-		"plugin.json":                     `{"name":"agent-notify","version":"1.2.3"}`,
+		"plugin.json":                      `{"name":"agent-notify","version":"1.2.3"}`,
 		"skills/notify/SKILL.md":           "fixture skill",
-		".mcp.json":                       `{"mcpServers":{"notify":{"command":"inert","type":"stdio"}}}`,
+		".mcp.json":                        `{"mcpServers":{"notify":{"command":"inert","type":"stdio"}}}`,
 	} {
 		path := filepath.Join(source, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -3678,6 +3677,8 @@ func TestWizardProbeCodexDiscoveryContract(t *testing.T) {
 	}
 }
 
+// The probe models only the fixture registry, never native Codex evidence.
+// In particular, a missing exact ID must not delete or attest a sibling.
 func TestWizardProbeCodexRegistryIsolation(t *testing.T) {
 	probe := buildWizardProbe(t)
 	profile := t.TempDir()
