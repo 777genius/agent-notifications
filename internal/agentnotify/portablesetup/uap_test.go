@@ -96,12 +96,7 @@ func buildProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "probe.go")
-	if err := os.WriteFile(src, []byte(`package main
-import ("encoding/json"; "os")
-func main() {
-	json.NewEncoder(os.Stdout).Encode(map[string]any{"args": os.Args[1:], "PLUGIN_DATA": os.Getenv("PLUGIN_DATA")})
-}
-`), 0600); err != nil {
+	if err := os.WriteFile(src, []byte(testenv.CodexNativeCLIProbeSource), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "probe")
