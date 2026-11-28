@@ -14,6 +14,7 @@ func TestCursorLinuxSourceQualificationKeepsKernelEvidenceSeparate(t *testing.T)
 		{"6.17.0-1022-azure", cursorP1Qualification},
 		{"7.0.0-1017-azure", "cursor-linux-amd64-ubuntu24.04.5-kernel7.0.0-1017-azure-ext4:source-ci-pr497"},
 		{"7.0.0-1014-aws", "cursor-linux-amd64-ubuntu24.04.5-kernel7.0.0-1014-aws-ext4:source-ci-aws-20261123"},
+		{"7.0.0-1018-aws", "cursor-linux-amd64-ubuntu24.04.5-kernel7.0.0-1018-aws-ext4:qualification-candidate"},
 		{"", ""},
 		{"7.0.0-1013-aws", ""},
 		{"7.0.0-1015-aws", ""},
