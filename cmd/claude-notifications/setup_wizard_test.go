@@ -1477,7 +1477,7 @@ func TestSetupWizardTwoPhaseUpdateThenAddE2E(t *testing.T) {
 	}
 }
 
-func TestSetupWizardMixedUninstallHoldsClaudeE2E(t *testing.T) {
+func TestSetupWizardMixedNativeCodexUninstallE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	env := newWizardCLIEnv(t, ctx, false)
@@ -1504,70 +1504,26 @@ func TestSetupWizardMixedUninstallHoldsClaudeE2E(t *testing.T) {
 		t.Fatalf("install both: %+v", got)
 	}
 	out.Reset()
-	hold := append([]string{"--action", "uninstall", "--agents", "claude,codex", "--yes", "--json"}, shared...)
-	if code := executeSetupWizardWith(ctx, hold, &out, io.Discard, strings.NewReader(""), false); code != 1 {
-		t.Fatalf("hold exit: %d %s", code, out.String())
+	remove := append([]string{"--action", "uninstall", "--agents", "claude,codex", "--yes", "--json"}, shared...)
+	if code := executeSetupWizardWith(ctx, remove, &out, io.Discard, strings.NewReader(""), false); code != 0 {
+		t.Fatalf("native Codex uninstall exit: %d %s", code, out.String())
 	}
-	held := decodeWizardJSON(t, out)
-	if held.Outcome != "incomplete" || held.Reason != "external_uninstall_required" {
-		t.Fatalf("hold: %+v", held)
-	}
-	for _, target := range held.Targets {
-		if target.Client == "claude" && target.Unit == "agent-notify" && target.Outcome == "completed" {
-			t.Fatalf("Claude removed before Codex attestation: %+v", held.Targets)
-		}
-	}
-	joined := strings.Join(held.Command, " ")
-	if !strings.Contains(joined, "claude") || !strings.Contains(joined, "codex") || !strings.Contains(joined, "--external-uninstalled") {
-		t.Fatalf("retry omitted mixed uninstall: %v", held.Command)
+	removed := decodeWizardJSON(t, out)
+	if removed.Outcome != "completed" || !removed.DataRetained {
+		t.Fatalf("native mixed removal did not retain data: %+v", removed)
 	}
 	out.Reset()
 	inspect := append([]string{"--action", "inspect", "--json"}, shared...)
 	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
-		t.Fatalf("inspect hold: %d %s", code, out.String())
-	}
-	view := decodeWizardJSON(t, out)
-	both := notify(view)
-	if both["claude"] != "installed" || both["codex"] != "installed" {
-		t.Fatalf("hold revoked a sibling: %+v", view.Targets)
-	}
-	found := false
-	for _, next := range view.NextActions {
-		if next.Kind == "test-notification" {
-			t.Fatalf("inspect offered delivery while uninstall is pending: %+v", view.NextActions)
-		}
-		if next.Kind != "external-uninstall" {
-			continue
-		}
-		found = true
-		cmd := strings.Join(next.Command, " ")
-		if !strings.Contains(cmd, "claude") || !strings.Contains(cmd, "codex") || !strings.Contains(cmd, "--external-uninstalled") {
-			t.Fatalf("inspect resume omitted mixed uninstall: %v", next.Command)
-		}
-	}
-	if !found {
-		t.Fatalf("inspect omitted pending uninstall: %+v", view.NextActions)
-	}
-	out.Reset()
-	resume := []string{
-		"--action", "uninstall", "--json", "--external-uninstalled",
-		"--control-root", env.control, "--runtime-root", env.runtime,
-		"--global-config", env.global, "--helper", env.probe,
-		"--claude-executable", env.probe, "--codex-executable", env.probe,
-	}
-	if code := executeSetupWizardWith(ctx, resume, &out, io.Discard, strings.NewReader(""), false); code != 0 {
-		t.Fatalf("attested resume: %d %s", code, out.String())
-	}
-	if got := decodeWizardJSON(t, out); got.Outcome != "completed" {
-		t.Fatalf("attested resume: %+v", got)
-	}
-	out.Reset()
-	if code := executeSetupWizardWith(ctx, inspect, &out, io.Discard, strings.NewReader(""), false); code != 0 {
-		t.Fatalf("inspect after attested uninstall: %d %s", code, out.String())
+		t.Fatalf("inspect native removal: %d %s", code, out.String())
 	}
 	after := notify(decodeWizardJSON(t, out))
 	if after["claude"] == "installed" || after["codex"] == "installed" {
-		t.Fatalf("attested uninstall left bindings: %+v", after)
+		t.Fatalf("native mixed uninstall left bindings: %+v", after)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(env.control)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("native mixed uninstall left an incomplete reservation: %+v %v", snap.Ledger, err)
 	}
 }
 
