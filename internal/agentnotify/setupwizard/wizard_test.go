@@ -5740,7 +5740,7 @@ func TestWizardMixedNativeCodexRemovalKeepsSiblingAtomicity(t *testing.T) {
 	}
 }
 
-func TestWizardMixedUninstallHoldsCodexHooksUntilAttested(t *testing.T) {
+func TestWizardMixedNativeCodexRemovalRetiresHooksAfterConfirmation(t *testing.T) {
 	ctx := testCtx(t)
 	envHome := t.TempDir()
 	testenv.Set(t, envHome)
@@ -5781,21 +5781,19 @@ func TestWizardMixedUninstallHoldsCodexHooksUntilAttested(t *testing.T) {
 		t.Fatalf("hooks.json after install: %s %v", data, err)
 	}
 	req.Action = ActionUninstall
-	held, err := Run(ctx, req)
-	if err == nil || held.Outcome != "incomplete" || held.Reason != "external_uninstall_required" {
-		t.Fatalf("hold: %+v %v", held, err)
-	}
-	data, err = os.ReadFile(hooks)
-	if err != nil || !strings.Contains(string(data), "codex-hook-wrapper") {
-		t.Fatalf("Codex hooks removed before attestation: %s %v", data, err)
-	}
-	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 2 {
-		t.Fatalf("notify revoked with hooks still pending Codex: %v", live)
-	}
-	req.ExternalUninstalled = true
 	removed, err := Run(ctx, req)
-	if err != nil || removed.Outcome != "completed" {
-		t.Fatalf("attested uninstall: %+v %v", removed, err)
+	if err != nil || removed.Outcome != "completed" || !removed.DataRetained {
+		t.Fatalf("native Codex uninstall: %+v %v", removed, err)
+	}
+	if _, err := os.Stat(hooks); !os.IsNotExist(err) {
+		t.Fatalf("Codex hooks persisted after verified native removal: %v", err)
+	}
+	if live := LiveNotifyClients(control, []string{"claude", "codex"}); len(live) != 0 {
+		t.Fatalf("native mixed removal left bindings: %v", live)
+	}
+	snap, err := installruntime.ReadInstalledSnapshot(control)
+	if err != nil || snap.Ledger.PendingMutation != nil {
+		t.Fatalf("native mixed removal left pending mutation: %+v %v", snap.Ledger, err)
 	}
 }
 
