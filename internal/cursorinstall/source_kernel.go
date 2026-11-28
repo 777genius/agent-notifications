@@ -6,7 +6,7 @@ package cursorinstall
 // qualification and user consent remain separate requirements.
 func SupportsLinuxSourceKernel(kernel string) bool {
 	switch kernel {
-	case "6.17.0-1022-azure", "7.0.0-1017-azure", "7.0.0-1014-aws":
+	case "6.17.0-1022-azure", "7.0.0-1017-azure", "7.0.0-1014-aws", "7.0.0-1018-aws":
 		return true
 	default:
 		return false
