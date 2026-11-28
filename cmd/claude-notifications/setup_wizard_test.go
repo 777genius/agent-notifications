@@ -3358,39 +3358,59 @@ func codex() {
 	root := os.Getenv("CODEX_HOME")
 	if root == "" { os.Exit(97) }
 	state := filepath.Join(root, "TEST-wizard-codex-installed.json")
+	registry := struct {
+		Marketplaces map[string]string
+		Installed map[string]map[string]any
+	}{map[string]string{}, map[string]map[string]any{}}
+	body, err := os.ReadFile(state)
+	if err == nil {
+		if json.Unmarshal(body, &registry) != nil || registry.Marketplaces == nil || registry.Installed == nil { os.Exit(98) }
+	} else if !os.IsNotExist(err) { os.Exit(98) }
+	save := func() {
+		body, err := json.Marshal(registry)
+		if err != nil || os.WriteFile(state, body, 0600) != nil { os.Exit(98) }
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
+	}
+	absent := func() {
+		os.Stderr.WriteString("not configured or installed\n")
+		os.Exit(1)
+	}
 	args := os.Args[1:]
 	switch {
 	case len(args) == 5 && strings.Join(args[:3], " ") == "plugin marketplace add" && args[4] == "--json":
-		json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
+		body, err := os.ReadFile(filepath.Join(args[3], ".agents", "plugins", "marketplace.json"))
+		var market struct { Name string }
+		if err != nil || json.Unmarshal(body, &market) != nil || market.Name == "" { os.Exit(98) }
+		registry.Marketplaces[market.Name] = args[3]
+		save()
+	case len(args) == 5 && strings.Join(args[:3], " ") == "plugin marketplace update" && args[4] == "--json":
+		if registry.Marketplaces[args[3]] == "" { absent() }
+		save()
 	case len(args) == 4 && args[0] == "plugin" && args[1] == "add" && args[3] == "--json":
 		name, marketplace, ok := strings.Cut(args[2], "@")
-		if !ok || name == "" || marketplace == "" { os.Exit(98) }
-		entry := map[string]any{"pluginId": args[2], "name": name, "marketplaceName": marketplace, "installed": true, "enabled": true}
-		body, err := json.Marshal(entry)
-		if err != nil || os.WriteFile(state, body, 0600) != nil { os.Exit(98) }
-		json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
+		source := registry.Marketplaces[marketplace]
+		if !ok || name == "" || marketplace == "" || source == "" { os.Exit(98) }
+		body, err := os.ReadFile(filepath.Join(source, ".codex-plugin", "plugin.json"))
+		var manifest struct { Name, Version string }
+		if err != nil || json.Unmarshal(body, &manifest) != nil || manifest.Name != name { os.Exit(98) }
+		version := manifest.Version
+		if version == "" { version = "local" }
+		registry.Installed[args[2]] = map[string]any{"pluginId": args[2], "name": name, "marketplaceName": marketplace, "installed": true, "enabled": true, "version": version, "source": map[string]any{"source": "local", "path": source}}
+		save()
 	case len(args) == 4 && args[0] == "plugin" && args[1] == "remove" && args[3] == "--json":
-		body, err := os.ReadFile(state)
-		var entry map[string]any
-		if err != nil || json.Unmarshal(body, &entry) != nil || entry["pluginId"] != args[2] || entry["installed"] != true { os.Exit(98) }
-		entry["installed"], entry["enabled"] = false, false
-		body, err = json.Marshal(entry)
-		if err != nil || os.WriteFile(state, body, 0600) != nil { os.Exit(98) }
-		json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
+		if _, ok := registry.Installed[args[2]]; !ok { absent() }
+		delete(registry.Installed, args[2])
+		save()
 	case len(args) == 5 && strings.Join(args[:3], " ") == "plugin marketplace remove" && args[4] == "--json":
-		body, err := os.ReadFile(state)
-		var entry map[string]any
-		if err != nil || json.Unmarshal(body, &entry) != nil || entry["marketplaceName"] != args[3] || entry["installed"] != false { os.Exit(98) }
-		if os.Remove(state) != nil { os.Exit(98) }
-		json.NewEncoder(os.Stdout).Encode(map[string]any{"ok": true})
+		if registry.Marketplaces[args[3]] == "" { absent() }
+		for _, entry := range registry.Installed {
+			if entry["marketplaceName"] == args[3] { os.Exit(98) }
+		}
+		delete(registry.Marketplaces, args[3])
+		save()
 	case len(args) == 3 && strings.Join(args, " ") == "plugin list --json":
 		entries := []map[string]any{}
-		body, err := os.ReadFile(state)
-		if err == nil {
-			var entry map[string]any
-			if json.Unmarshal(body, &entry) != nil { os.Exit(98) }
-			if entry["installed"] == true { entries = append(entries, entry) }
-		} else if !os.IsNotExist(err) { os.Exit(98) }
+		for _, entry := range registry.Installed { entries = append(entries, entry) }
 		json.NewEncoder(os.Stdout).Encode(map[string]any{"installed": entries})
 	default:
 		os.Exit(99)
@@ -3504,6 +3524,77 @@ func buildWizardProbe(t *testing.T) string {
 		t.Fatal("materialized wizard probe differs from immutable fixture", err)
 	}
 	return out
+}
+
+// The probe models only the fixture registry, never native Codex evidence.
+// In particular, a missing exact ID must not delete or attest a sibling.
+func TestWizardProbeCodexRegistryIsolation(t *testing.T) {
+	probe := buildWizardProbe(t)
+	profile := t.TempDir()
+	t.Setenv("CODEX_HOME", profile)
+	run := func(args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(context.Background(), probe, args...)
+		return cmd.CombinedOutput()
+	}
+	mustRun := func(args ...string) []byte {
+		t.Helper()
+		body, err := run(args...)
+		if err != nil {
+			t.Fatalf("%v: %s: %v", args, body, err)
+		}
+		return body
+	}
+	for _, market := range []string{"agentplugins-one", "agentplugins-two"} {
+		root := t.TempDir()
+		for rel, body := range map[string]string{
+			".agents/plugins/marketplace.json": "{\"name\":\"" + market + "\"}",
+			".codex-plugin/plugin.json":       "{\"name\":\"agent-notify\",\"version\":\"1.2.3\"}",
+		} {
+			path := filepath.Join(root, filepath.FromSlash(rel))
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mustRun("plugin", "marketplace", "add", root, "--json")
+		mustRun("plugin", "add", "agent-notify@"+market, "--json")
+	}
+	check := func(want ...string) {
+		t.Helper()
+		var listed struct {
+			Installed []struct {
+				PluginID string
+				Version  string
+			}
+		}
+		if err := json.Unmarshal(mustRun("plugin", "list", "--json"), &listed); err != nil {
+			t.Fatal(err)
+		}
+		if len(listed.Installed) != len(want) {
+			t.Fatalf("unexpected registry: %+v", listed)
+		}
+		for _, id := range want {
+			found := false
+			for _, entry := range listed.Installed {
+				if entry.PluginID == id && entry.Version == "1.2.3" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("missing %s: %+v", id, listed)
+			}
+		}
+	}
+	check("agent-notify@agentplugins-one", "agent-notify@agentplugins-two")
+	mustRun("plugin", "remove", "agent-notify@agentplugins-one", "--json")
+	mustRun("plugin", "marketplace", "remove", "agentplugins-one", "--json")
+	body, err := run("plugin", "remove", "agent-notify@agentplugins-one", "--json")
+	if err == nil || !strings.Contains(string(body), "not configured or installed") {
+		t.Fatalf("missing exact absence diagnostic: %s: %v", body, err)
+	}
+	check("agent-notify@agentplugins-two")
 }
 
 func writeWizardPackage(t *testing.T, root, probe string) {
