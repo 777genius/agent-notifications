@@ -1987,7 +1987,7 @@ jobs:
 
 
   test:
-    needs: [scope, go-tests, installer-native, cursor-physical]
+    needs: [scope, go-tests, installer-native, cursor-physical, btrfs-setup]
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (always() && !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode != 'release-tools' && needs.scope.outputs.mode != 'release-equivalent' && needs.scope.outputs.mode != 'docs') }}
     # Keep the established required-check names while retries target only failed shards.
     name: Test on Ubuntu (${{ matrix.go }})
@@ -2006,12 +2006,14 @@ jobs:
           GO_TESTS_RESULT: ${{ needs.go-tests.result }}
           INSTALLER_NATIVE_RESULT: ${{ needs.installer-native.result }}
           CURSOR_PHYSICAL_RESULT: ${{ needs.cursor-physical.result }}
+          BTRFS_SETUP_RESULT: ${{ needs.btrfs-setup.result }}
         run: |
           set -euo pipefail
           test "$SCOPE_RESULT" = success
           test "$GO_TESTS_RESULT" = success
           test "$INSTALLER_NATIVE_RESULT" = success
           test "$CURSOR_PHYSICAL_RESULT" = success
+          test "$BTRFS_SETUP_RESULT" = success
 
       - name: Checkout coverage source
         uses: actions/checkout@v7
@@ -2037,7 +2039,7 @@ jobs:
 
   native-evidence:
     name: Native input evidence (Ubuntu)
-    needs: [scope, go-tests, installer-native, cursor-physical, opencode-plugin, lint, test]
+    needs: [scope, go-tests, installer-native, cursor-physical, opencode-plugin, lint, btrfs-setup, test]
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (!cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode == 'full') }}
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || vars.CI_LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
@@ -2052,7 +2054,7 @@ jobs:
         env:
           CI_MODE: ${{ needs.scope.outputs.mode }}
           NEEDS_JSON: ${{ toJSON(needs) }}
-        run: python3 -B tools/ci_native_evidence.py receipt --workflow ci-ubuntu.yml --output native-input-receipt.json --jobs go-tests installer-native cursor-physical opencode-plugin lint test
+        run: python3 -B tools/ci_native_evidence.py receipt --workflow ci-ubuntu.yml --output native-input-receipt.json --jobs go-tests installer-native cursor-physical opencode-plugin lint btrfs-setup test
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-inputs-ci-ubuntu.yml-${{ github.run_id }}-${{ github.run_attempt }}
@@ -2091,3 +2093,89 @@ jobs:
         with:
           version: v2.12.2
           args: --timeout=5m --max-same-issues=0
+
+  btrfs-setup:
+    name: Native Btrfs setup ownership E2E
+    needs: [scope]
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && !cancelled() && github.event_name != 'workflow_dispatch' && needs.scope.outputs.mode == 'full' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.2'
+          cache: false
+      - name: Mount disposable Btrfs filesystem and test subvolume
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v mkfs.btrfs >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq btrfs-progs
+          fi
+          image="$RUNNER_TEMP/setup-btrfs.img"
+          mountpoint="$RUNNER_TEMP/setup-btrfs-mount"
+          truncate -s 256M "$image"
+          mkfs.btrfs -f -q "$image"
+          mkdir -p "$mountpoint"
+          sudo mount -t btrfs -o loop,user_subvol_rm_allowed "$image" "$mountpoint"
+          printf 'BTRFS_MOUNT=%s\n' "$mountpoint" >> "$GITHUB_ENV"
+          printf 'BTRFS_TEST_TMPDIR=%s\n' "$mountpoint/test-tmp" >> "$GITHUB_ENV"
+          sudo btrfs subvolume create "$mountpoint/test-tmp"
+          sudo chown "$(id -u):$(id -g)" "$mountpoint/test-tmp"
+      - name: Require production Apply/preflight and snapshot tests to PASS without skips
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          # Compile on the runner's ordinary filesystem; only the test's
+          # runtime temporary directories belong on the small Btrfs volume.
+          TMPDIR="$RUNNER_TEMP" GOTMPDIR="$RUNNER_TEMP" go test -c \
+            -o "$RUNNER_TEMP/setup-btrfs.test" ./internal/agentnotify/setup
+          if ! (
+            cd internal/agentnotify/setup
+            TMPDIR="$BTRFS_TEST_TMPDIR" go tool test2json -t \
+              -p github.com/777genius/agent-notifications/internal/agentnotify/setup \
+              "$RUNNER_TEMP/setup-btrfs.test" -test.v=test2json \
+              -test.run '^(TestSetupState(SurvivesBtrfsRenumberOnlyOnRecordedVolume|RefusesBtrfsSnapshotWithSameInode)|TestSetupApplyPersistsBtrfsSubvolumeIdentityForPreflight)$' \
+              -test.count=1 -test.timeout=8m
+          ) > "$RUNNER_TEMP/btrfs-tests.json"; then
+            cat "$RUNNER_TEMP/btrfs-tests.json"
+            exit 1
+          fi
+          python3 -B - <<'PY'
+          import json, os
+          path = os.path.join(os.environ["RUNNER_TEMP"], "btrfs-tests.json")
+          wanted = {
+              "TestSetupStateSurvivesBtrfsRenumberOnlyOnRecordedVolume",
+              "TestSetupStateRefusesBtrfsSnapshotWithSameInode",
+              "TestSetupApplyPersistsBtrfsSubvolumeIdentityForPreflight",
+          }
+          passed, skipped = set(), set()
+          with open(path, encoding="utf-8") as stream:
+              for line in stream:
+                  row = json.loads(line)
+                  test, action = row.get("Test"), row.get("Action")
+                  if test in wanted and action == "pass":
+                      passed.add(test)
+                  if test in wanted and action == "skip":
+                      skipped.add(test)
+          assert passed == wanted and not skipped, f"Btrfs tests incomplete: passed={passed}, skipped={skipped}"
+          print("PASS: persisted subvolume identity, same-inode snapshot rejection, and read-only preflight")
+          PY
+      - name: Remove test subvolume and unmount Btrfs
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${BTRFS_MOUNT:-}" ] && mountpoint -q "$BTRFS_MOUNT"; then
+            if [ -n "${BTRFS_TEST_TMPDIR:-}" ] && sudo btrfs subvolume show "$BTRFS_TEST_TMPDIR" >/dev/null 2>&1; then
+              sudo btrfs subvolume delete "$BTRFS_TEST_TMPDIR"
+            fi
+            sudo umount "$BTRFS_MOUNT"
+          fi
+          rm -f "$RUNNER_TEMP/setup-btrfs.img"

@@ -3,7 +3,7 @@ package cursorinstall
 import "testing"
 
 func TestSupportsLinuxSourceKernel(t *testing.T) {
-	for _, kernel := range []string{"6.17.0-1022-azure", "7.0.0-1017-azure", "7.0.0-1014-aws"} {
+	for _, kernel := range []string{"6.17.0-1022-azure", "7.0.0-1017-azure", "7.0.0-1014-aws", "7.0.0-1018-aws"} {
 		if !SupportsLinuxSourceKernel(kernel) {
 			t.Errorf("source qualification kernel refused: %q", kernel)
 		}

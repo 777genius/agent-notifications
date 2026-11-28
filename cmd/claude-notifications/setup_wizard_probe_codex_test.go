@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -43,7 +44,20 @@ func TestWizardProbeCodexRemovalContract(t *testing.T) {
 	}
 	name, marketplace := "agent-notify", shared.ManagedMarketplaceName("TEST-codex-removal")
 	spec := name + "@" + marketplace
-	must("plugin", "marketplace", "add", filepath.Join(root, "managed"), "--json")
+	managed := filepath.Join(root, "managed")
+	for rel, body := range map[string]string{
+		".agents/plugins/marketplace.json": `{"name":"` + marketplace + `"}`,
+		".codex-plugin/plugin.json":        `{"name":"agent-notify","version":"1.0.0"}`,
+	} {
+		path := filepath.Join(managed, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	must("plugin", "marketplace", "add", managed, "--json")
 	must("plugin", "add", spec, "--json")
 	if codex.PluginStatusFromList(must("plugin", "list", "--json"), name, marketplace) != codex.StatusInstalled {
 		t.Fatal("qualified installed status missing")
@@ -66,8 +80,17 @@ func TestWizardProbeCodexRemovalContract(t *testing.T) {
 		t.Fatal("removed plugin did not have qualified absence")
 	}
 	must("plugin", "marketplace", "remove", marketplace, "--json")
-	if _, err := os.Stat(state); !os.IsNotExist(err) {
-		t.Fatalf("matching marketplace cleanup did not remove TEST state: %v", err)
+	after, err := os.ReadFile(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registry struct {
+		Marketplaces map[string]string
+		Installed    map[string]map[string]any
+	}
+	if err := json.Unmarshal(after, &registry); err != nil || registry.Marketplaces == nil || registry.Installed == nil ||
+		len(registry.Marketplaces) != 0 || len(registry.Installed) != 0 {
+		t.Fatalf("matching marketplace cleanup did not empty TEST registry: %v", err)
 	}
 	if codex.PluginStatusFromList(must("plugin", "list", "--json"), name, marketplace) != codex.StatusAbsent {
 		t.Fatal("marketplace cleanup changed qualified absence")

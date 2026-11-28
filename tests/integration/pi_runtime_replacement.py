@@ -124,7 +124,58 @@ def exercise(root, profile, args, env, sink, *, fixture, product, command, nativ
             result["cursor_preserved_during_pi_lifecycle"] = True
             expected = {key: value for key, value in consumers.items()
                         if key not in cursor_keys and key != "claude-hooks"}
-            cursor("uninstall", replacement)
+            try:
+                cursor("uninstall", replacement)
+            except RuntimeError:
+                # Preserve the original failure. Only closed boolean facts
+                # about this disposable TEST profile may enter the receipt;
+                # never copy the CLI error, argv, paths or native state bytes.
+                evidence = {
+                    "phase": "cursor-uninstall",
+                    "ledger_readable": False,
+                    "pending_mutation_present": None,
+                    "cursor_consumer_present": None,
+                    "sibling_consumers_unchanged": None,
+                    "cursor_profile_bytes_unchanged": None,
+                    "uap_state_readable": False,
+                    "uap_cursor_binding_present": None,
+                    "uap_native_removal_attempt_present": None,
+                }
+                try:
+                    after = ledger()
+                    consumers_after = after["Consumers"]
+                    evidence["ledger_readable"] = True
+                    evidence["pending_mutation_present"] = after.get("PendingMutation") is not None
+                    evidence["cursor_consumer_present"] = any(key in consumers_after for key in cursor_keys)
+                    evidence["sibling_consumers_unchanged"] = all(
+                        consumers_after.get(key) == value for key, value in expected.items())
+                except Exception:
+                    # Diagnostic collection must not replace the original
+                    # production refusal with a secondary reporting failure.
+                    pass
+                try:
+                    evidence["cursor_profile_bytes_unchanged"] = cursor_files() == saved_cursor_files
+                except Exception:
+                    pass
+                # A failed host uninstall may have revoked its consumer while
+                # UAP still owns a binding (or has an unfinished native attempt).
+                # Observe only yes/no facts from this disposable test state.
+                try:
+                    state_path = root / "uap/state/state-v2.json"
+                    uap_state = json.loads(state_path.read_text(encoding="utf-8"))
+                    installations = uap_state.get("installations", [])
+                    bindings = [entry for inst in installations if isinstance(inst, dict)
+                                for entry in inst.get("clients", {}).values()
+                                if isinstance(entry, dict) and entry.get("client_id") == "cursor"]
+                    evidence["uap_state_readable"] = True
+                    evidence["uap_cursor_binding_present"] = any(
+                        item.get("materialization") != "absent" for item in bindings)
+                    evidence["uap_native_removal_attempt_present"] = any(
+                        bool(item.get("native_activation_attempt")) for item in bindings)
+                except (OSError, ValueError, TypeError, AttributeError):
+                    pass
+                result["cursor_retirement_failure"] = evidence
+                raise
             writer(replacement, args.replacement_runtime_stage, "claude-hooks", remove=True)
             product.require(ledger()["Consumers"] == expected,
                             "runtime_replacement_cursor_retirement_changed_existing_authority")

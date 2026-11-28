@@ -46,13 +46,20 @@ import (
 	"github.com/777genius/agent-notifications/internal/agentnotify/portableasset"
 	"github.com/777genius/agent-notifications/internal/cursorinstall"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/testenv"
 )
 
 type listingRunner struct {
 	configRoot string
 }
 
-func (r listingRunner) Run(_ context.Context, _ ports.Command) (ports.CommandResult, error) {
+func (r listingRunner) Run(_ context.Context, command ports.Command) (ports.CommandResult, error) {
+	if body, handled, err := testenv.CodexPluginCLI(command.Env, command.Argv); handled {
+		return ports.CommandResult{Stdout: body}, err
+	}
+	if body, handled, err := testenv.ClaudeMCPHealth(r.configRoot, command.Argv); handled {
+		return ports.CommandResult{Stdout: body}, err
+	}
 	root := filepath.Join(r.configRoot, "skills")
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
@@ -89,12 +96,7 @@ func buildProbe(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "probe.go")
-	if err := os.WriteFile(src, []byte(`package main
-import ("encoding/json"; "os")
-func main() {
-	json.NewEncoder(os.Stdout).Encode(map[string]any{"args": os.Args[1:], "PLUGIN_DATA": os.Getenv("PLUGIN_DATA")})
-}
-`), 0600); err != nil {
+	if err := os.WriteFile(src, []byte(testenv.CodexNativeCLIProbeSource), 0600); err != nil {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "probe")

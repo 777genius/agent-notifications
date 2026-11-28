@@ -45,6 +45,37 @@ _COMMAND_CODES = {
 }
 
 
+# Source-backed diagnostic categories only. Never emit the original target
+# reason, even when it contains a recognized wrapper and private path suffix.
+_CURSOR_REMOVAL_ERRORS = (
+    ("native removal attempt disappeared before recording its effect", "attempt_missing"),
+    ("local removal did not establish a certain removal", "effect_unconfirmed"),
+    ("installation disappeared before recording native removal", "installation_missing"),
+    ("native removal decision callback changed frozen state", "decision_input_changed"),
+    ("native removal decision callback changed durable predecessor", "decision_predecessor_changed"),
+    ("native transition observation is duplicated or lacks exact ownership", "transition_owner_unproven"),
+    ("state save failed", "state_save_failed"),
+    ("state became visible after save error", "state_durability_failed"),
+    ("cursor removal differs from original acknowledged ownership", "cursor_ownership_changed"),
+    ("cursor owned absence is unproved", "cursor_absence_unproven"),
+    ("external deactivation failed; managed materialization was retained for repair", "deactivation_failed"),
+    ("persist native deactivation", "decision_failed"),
+)
+
+
+def _cursor_removal_error(reason):
+    if not isinstance(reason, str):
+        return None
+    for wrapper in ("external deactivation failed; managed materialization was retained for repair: ",
+                    "persist native deactivation: "):
+        if reason.startswith(wrapper):
+            detail = reason[len(wrapper):]
+            for prefix, code in _CURSOR_REMOVAL_ERRORS:
+                if detail.startswith(prefix):
+                    return code
+    return next((code for prefix, code in _CURSOR_REMOVAL_ERRORS if reason.startswith(prefix)), None)
+
+
 def _command_failure(result):
     """Project a failed CLI response to bounded, non-private product codes."""
     diagnostic = {"exit_code": result.returncode, "stderr_present": bool(result.stderr)}
@@ -69,8 +100,17 @@ def _command_failure(result):
     diagnostic.update(codes(value, ("action", "outcome", "reason")))
     targets = value.get("targets")
     if isinstance(targets, list):
-        diagnostic["targets"] = [codes(row, ("client", "outcome", "reason", "failureStage"))
-                                 for row in targets[:8] if isinstance(row, dict)]
+        diagnostic["targets"] = []
+        for row in targets[:8]:
+            if not isinstance(row, dict):
+                continue
+            safe = codes(row, ("client", "outcome", "reason", "failureStage"))
+            if (value.get("action") == "uninstall" and value.get("reason") == "portable_remove_failed"
+                    and row.get("client") == "cursor"):
+                error = _cursor_removal_error(row.get("reason"))
+                if error is not None:
+                    safe["cursor_removal_error"] = error
+            diagnostic["targets"].append(safe)
     return diagnostic
 
 
@@ -98,6 +138,9 @@ def run(args):
                                   for name in ("pi_native_fixture.py", "pi_installed_fixture.py")},
               "working_tree_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO)),
               "host_os": platform.system(), "host_architecture": platform.machine(),
+              # Fixed host metadata only: diagnose runner kernel drift without
+              # accepting an unqualified host or exposing private profile paths.
+              "host_kernel_release": platform.release()[:128],
               "candidate_binary_sha256": P.sha(args.candidate), "package_sha256": P.sha(args.package),
               "replacement_candidate_binary_sha256": P.sha(args.replacement_runtime_stage / args.candidate.name),
               "updated_package_sha256": P.sha(args.updated_package), "pi_binary_sha256": P.sha(args.pi_executable),

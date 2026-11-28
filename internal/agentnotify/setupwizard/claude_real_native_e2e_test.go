@@ -14,11 +14,13 @@ import (
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/clients/claude"
 	"github.com/777genius/plugin-kit-ai/install/integrationctl/agentplugins/domain"
 
+	notifysetup "github.com/777genius/agent-notifications/internal/agentnotify/setup"
 	"github.com/777genius/agent-notifications/internal/installruntime"
+	"github.com/777genius/agent-notifications/internal/testenv"
 )
 
 // This test is opt-in in the generic suite, but the dedicated native CI lane
-// installs exactly the reporter's Claude Code 2.1.317 and REQUIRES a PASS.
+// installs exactly the reporter's Claude Code 2.1.332 and REQUIRES a PASS.
 // It invokes the real UAP materializer, real Claude plugin listing and real
 // user-scope skills-dir projection inside an isolated, throwaway HOME.
 func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
@@ -42,18 +44,44 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	control, runtimeRoot, global, _, _ := managedRuntime(t)
-	probe := buildProbe(t)
+	control, runtimeRoot, global, _, generation := managedRuntime(t)
+	// Match /init's policy-only configure stage before the UAP wizard. Keep the
+	// global config private and inert; no app/native permission or notification
+	// delivery is requested by this path.
+	if err := os.WriteFile(global, []byte(`{"foreign":{"keep":true},"notifications":{"desktop":{"enabled":false,"sound":false,"clickToFocus":false}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	policyOptions := notifysetup.Options{
+		ControlRoot: control, RuntimeRoot: runtimeRoot,
+		Owner: "existing-installer", ConsumerID: "existing", GlobalConfig: global,
+	}
+	enabled := true
+	policyRequest := notifysetup.Request{ExpectedGeneration: generation, Enabled: &enabled, Route: &notifysetup.Route{}}
+	prepared, err := os.ReadFile(global)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := notifysetup.Inspect(ctx, policyOptions, policyRequest, prepared); err != nil {
+		t.Fatalf("/init policy-only configure preflight: %v", err)
+	}
+	configured, err := notifysetup.Apply(ctx, policyOptions, policyRequest)
+	if err != nil || !configured.Enabled || configured.Namespace == "" {
+		t.Fatalf("/init policy-only configure did not persist durable setup state: result=%+v err=%v", configured, err)
+	}
+
+	// Unlike the generic one-shot JSON probe, this endpoint must answer the
+	// real Claude MCP handshake and remain alive until the client closes stdin.
+	probe := buildClaudeNativeMCPProbe(t)
 	pkg := filepath.Join(filepath.Dir(control), "package")
 	writePackage(t, pkg, probe)
 	scope := filepath.Join(filepath.Dir(control), "scope")
 	if err := os.MkdirAll(scope, 0700); err != nil {
 		t.Fatal(err)
 	}
-	off := false
+	off, on := false, true
 	req := Request{
 		Action: ActionInstall, Agents: []string{"claude"}, Yes: true,
-		Hooks: &off, PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot,
+		Hooks: &off, AgentNotify: &on, PackageRoot: pkg, ControlRoot: control, RuntimeRoot: runtimeRoot,
 		GlobalConfig: global, ClaudeConfig: claudeRoot, ClientExecutable: executable,
 		Helper: probe, ScopeRoot: scope,
 	}
@@ -87,7 +115,7 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 		for _, binding := range installation.Clients {
 			if binding.ClientID == string(domain.ClientClaude) {
 				if binding.Activation != domain.ActivationActive || binding.Verification != domain.VerificationInstalled {
-					t.Fatalf("native client not verified: activation=%q verification=%q", binding.Activation, binding.Verification)
+					t.Fatalf("native client not verified: activation=%q verification=%q next=%+v", binding.Activation, binding.Verification, installed.NextActions)
 				}
 				managedPath = binding.TargetLocator
 			}
@@ -156,4 +184,46 @@ func TestWizardClaudeNativeSkillsDirLifecycleE2E(t *testing.T) {
 	if got := claude.PluginStatusFromList(after, "agent-notify", managedPath); got != claude.StatusAbsent {
 		t.Fatalf("native Claude still sees removed plugin or returned an unrecognized listing: status=%d", got)
 	}
+}
+
+// Only the endpoint is inert; Claude itself performs the actual MCP discovery.
+// It does not deliver notifications or respond to tool calls.
+func buildClaudeNativeMCPProbe(t *testing.T) string {
+	t.Helper()
+	return testenv.GoFixture(t, "package main\n"+
+		"\n"+
+		"import (\n"+
+		" \"encoding/json\"\n"+
+		" \"os\"\n"+
+		")\n"+
+		"\n"+
+		"func main() {\n"+
+		" dec, enc := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)\n"+
+		" for {\n"+
+		"  var req struct {\n"+
+		"   ID json.RawMessage `json:\"id\"`\n"+
+		"   Method string `json:\"method\"`\n"+
+		"   Params struct { ProtocolVersion string `json:\"protocolVersion\"` } `json:\"params\"`\n"+
+		"  }\n"+
+		"  if err := dec.Decode(&req); err != nil { return }\n"+
+		"  if len(req.ID) == 0 { continue }\n"+
+		"  resp := map[string]any{\"jsonrpc\":\"2.0\", \"id\":req.ID}\n"+
+		"  switch req.Method {\n"+
+		"  case \"initialize\":\n"+
+		"   version := req.Params.ProtocolVersion\n"+
+		"   switch version {\n"+
+		"   case \"2024-11-05\", \"2025-03-26\", \"2025-06-18\", \"2025-11-25\":\n"+
+		"   default: version = \"2025-11-25\"\n"+
+		"   }\n"+
+		"   resp[\"result\"] = map[string]any{\"protocolVersion\":version,\"capabilities\":map[string]any{\"tools\":map[string]any{}},\"serverInfo\":map[string]string{\"name\":\"TEST-agent-notify-probe\",\"version\":\"1.0.0\"}}\n"+
+		"  case \"tools/list\":\n"+
+		"   resp[\"result\"] = map[string]any{\"tools\": []any{map[string]any{\"name\":\"notification_status\",\"description\":\"Inert E2E probe\",\"inputSchema\":map[string]any{\"type\":\"object\",\"properties\":map[string]any{}}}}}\n"+
+		"  case \"ping\":\n"+
+		"   resp[\"result\"] = map[string]any{}\n"+
+		"  default:\n"+
+		"   resp[\"error\"] = map[string]any{\"code\":-32601,\"message\":\"method not supported\"}\n"+
+		"  }\n"+
+		"  if err := enc.Encode(resp); err != nil { return }\n"+
+		" }\n"+
+		"}\n")
 }

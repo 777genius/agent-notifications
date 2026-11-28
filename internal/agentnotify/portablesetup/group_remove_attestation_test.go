@@ -23,8 +23,9 @@ type groupRemovalRunner struct {
 func (r *groupRemovalRunner) Run(ctx context.Context, command ports.Command) (ports.CommandResult, error) {
 	if slices.Contains(command.Argv, "remove") {
 		r.codexRemoves++
-		return ports.CommandResult{}, nil
 	}
+	// Keep the exact Codex registry state aligned with the native remove:
+	// a successful no-op response alone does not prove plugin absence.
 	return r.listingRunner.Run(ctx, command)
 }
 

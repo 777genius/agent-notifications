@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -58,6 +59,17 @@ func (r *committedTimeoutRunner) Run(ctx context.Context, command ports.Command)
 		}
 	}
 	return listed, err
+}
+
+func (r *committedTimeoutRunner) RunDuplexToCompletion(ctx context.Context, command ports.Command, exchange func(io.Writer, io.Reader) error) error {
+	for _, variable := range command.Env {
+		if strings.HasPrefix(variable, "CODEX_HOME=") {
+			// Exercise the disposable Codex app-server process and its real
+			// stdin/stdout lifecycle. Claude's timeout remains an isolated Run.
+			return (processadapter.OS{}).RunDuplexToCompletion(ctx, command, exchange)
+		}
+	}
+	return errors.New("TEST discovery cannot run against an unrelated profile")
 }
 
 // This regression reaches actual managed records, acquired source and CLI
@@ -363,18 +375,6 @@ func TestMigrationActivationRecoveryPreservesSourceValidation(t *testing.T) {
 
 func buildRecoveryCodexCLI(t *testing.T) string {
 	t.Helper()
-	code := `package main
-import ("encoding/json"; "os"; "path/filepath"; "strings")
-func main() {
- root:=os.Getenv("CODEX_HOME"); args:=os.Args[1:]
- f,_:=os.OpenFile(filepath.Join(root,"TEST-trace"),os.O_CREATE|os.O_APPEND|os.O_WRONLY,0600); if f!=nil { f.WriteString(strings.Join(args," ")+"\n"); f.Close() }
- if len(args)>=3 && args[0]=="plugin" && args[1]=="add" { os.WriteFile(filepath.Join(root,"TEST-plugin"),[]byte(args[2]),0600) }
- if len(args)>=2 && args[0]=="plugin" && args[1]=="list" {
-  id,_:=os.ReadFile(filepath.Join(root,"TEST-plugin")); installed:=[]map[string]any{}
-  if len(id)>0 { name,market,_:=strings.Cut(string(id),"@"); installed=append(installed,map[string]any{"pluginId":string(id),"name":name,"marketplaceName":market,"installed":true,"enabled":true}) }
-  json.NewEncoder(os.Stdout).Encode(map[string]any{"installed":installed}); return
- }
- json.NewEncoder(os.Stdout).Encode(map[string]any{})
-}`
+	code := testenv.CodexNativeCLIProbeSource
 	return testenv.GoFixture(t, code)
 }

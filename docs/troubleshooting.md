@@ -54,6 +54,38 @@ for verified, explicit recovery. An incomplete `/init` may also leave the
 portable skill absent because it stops before the UAP wizard; this does not
 prove that an existing MCP binding was intentionally disabled.
 
+### Btrfs device renumbering after reboot
+
+On Linux/Btrfs, a subvolume can retain the same directory inode while its
+kernel-assigned device number changes across boots. New setup ownership records
+bind the directory to its persistent Btrfs subvolume UUID **and** tree ID using
+the unprivileged, read-only `BTRFS_IOC_GET_SUBVOL_INFO` ioctl. They do not use
+`statfs.f_fsid` or require `CAP_SYS_ADMIN`. A Btrfs snapshot receives a new
+subvolume UUID/ID even when it retains the original inode numbers.
+
+The top-level Btrfs root may report an all-zero subvolume UUID, and kernels
+older than 4.18 may not expose this ioctl. Those cases remain supported with
+the original exact `dev:ino` identity only; they do not receive automatic
+device-renumber recovery. A dedicated child subvolume (for example, the user's
+home subvolume) has its own UUID and can use the stronger renumber-safe match.
+
+**Existing Btrfs records written before this fix have no recorded subvolume ID.**
+They remain compatible only while the original `st_dev:ino` identity matches
+exactly; the installer never relaxes that legacy comparison after a device
+renumber. If the device number changed, it reports
+`initialization_recovery_required`: there is no trustworthy historical
+subvolume ID from which to prove that the current directory is the original
+rather than a snapshot. Preserve the existing control directory and policy;
+do not delete, overwrite, or manually rewrite `setupState` or the journal.
+Use the read-only inspection commands above and arrange explicit verified
+recovery. A kernel/device renumber alone is **not** sufficient proof for
+automatic adoption.
+A downgrade to a binary that predates the optional `volume` field may also
+reject the newer ownership marker during strict decoding. In that case,
+upgrade again to a build with Btrfs-volume support; do not edit or remove the
+marker to make an older binary accept it.
+
+
 Old versioned cache file entries may remain owned while another
 `Consumers[*].RuntimeRoot` still references that old root; the final
 consumer's verified relocation retires its file ownership without deleting
