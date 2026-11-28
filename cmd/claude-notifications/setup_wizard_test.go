@@ -3548,7 +3548,7 @@ func TestWizardProbeCodexRegistryIsolation(t *testing.T) {
 		root := t.TempDir()
 		for rel, body := range map[string]string{
 			".agents/plugins/marketplace.json": "{\"name\":\"" + market + "\"}",
-			".codex-plugin/plugin.json":       "{\"name\":\"agent-notify\",\"version\":\"1.2.3\"}",
+			".codex-plugin/plugin.json":        "{\"name\":\"agent-notify\",\"version\":\"1.2.3\"}",
 		} {
 			path := filepath.Join(root, filepath.FromSlash(rel))
 			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
