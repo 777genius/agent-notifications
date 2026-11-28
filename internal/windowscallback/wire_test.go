@@ -3,6 +3,7 @@ package windowscallback
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -90,7 +91,7 @@ func TestStrictFieldValidation(t *testing.T) {
 		}
 	}
 	s, _ := DecodeSnapshot(golden(t, "snapshot"))
-	for _, root := range []string{`C:\relative`, `\\?\UNC\host\share`, `\\?\C:\a\..\b`, `\\?\C:\a:stream`, `\\?\C:\a\`, `\\?\C:\a.`} {
+	for _, root := range []string{`C:\relative`, `\\?\UNC\host\share`, `\\?\C:\a\..\b`, `\\?\C:\a:stream`, `\\?\C:\a\`, `\\?\C:\a.`, `\\?\c:\Retained\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`} {
 		s.CanonicalRoot = root
 		if s.Validate() == nil {
 			t.Fatalf("invalid root %q", root)
@@ -98,9 +99,65 @@ func TestStrictFieldValidation(t *testing.T) {
 	}
 }
 
-// Breakage: the unqualified checkpoint accidentally enables a native call even
-// when trusted helper bytes are available. None never composes this port.
-func TestPortRemainsUnavailable(t *testing.T) {
+// Breakage: a well-formed rooted generation can escape its snapshot's exact
+// 32-hex directory identity, or a binding can use an alias spelling that is not
+// the canonical immutable path.
+func TestSnapshotAndBindingGenerationPaths(t *testing.T) {
+	s, e := DecodeSnapshot(golden(t, "snapshot"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, root := range []string{
+		`\\?\C:\Retained\bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`,
+		`\\?\C:\Retained\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
+		`\\?\C:\Retained\.\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
+	} {
+		clone := s
+		clone.CanonicalRoot = root
+		if clone.Validate() == nil {
+			t.Fatalf("wrong generation directory admitted: %q", root)
+		}
+	}
+	for _, path := range []string{
+		`\\?\C:\TEST\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\generation.wne`,
+		`\\?\C:\TEST\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\.\generation.wne`,
+		`\\?\c:\TEST\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\generation.wne`,
+		`\\?\C:\TEST\alias\generation.wne`,
+		`\\?\C:\TEST\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/generation.wne`,
+	} {
+		_, ok := bindingPath(path)
+		if ok != (path == `\\?\C:\TEST\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\generation.wne`) {
+			t.Fatalf("binding generation path decision changed: %q -> %v", path, ok)
+		}
+	}
+}
+
+// Breakage: typed JSON case-folds or ignores fields in a retained immutable
+// binding, allowing an unknown durable generation to masquerade as the exact
+// path/digest pair that the Windows participant journal appended.
+func TestRetainedBindingRejectsUnknownAndCaseFoldedFields(t *testing.T) {
+	valid := `{"SnapshotPath":"\\\\?\\C:\\TEST\\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\generation.wne","SHA256":"` + strings.Repeat("a", 64) + `"}`
+	var got Binding
+	if err := json.Unmarshal([]byte(valid), &got); err != nil || !ValidBinding(got) {
+		t.Fatalf("exact retained binding refused: %+v %v", got, err)
+	}
+	for _, malformed := range []string{
+		`{"SnapshotPath":"x","SHA256":"` + strings.Repeat("a", 64) + `","Unknown":true}`,
+		`{"snapshotPath":"x","SHA256":"` + strings.Repeat("a", 64) + `"}`,
+		`{"SnapshotPath":"x","sha256":"` + strings.Repeat("a", 64) + `"}`,
+		`{"SnapshotPath":"x","SHA256":"` + strings.Repeat("a", 64) + `","SHA256":"` + strings.Repeat("b", 64) + `"}`,
+		`{}`,
+	} {
+		var value Binding
+		if err := json.Unmarshal([]byte(malformed), &value); err == nil {
+			t.Fatalf("ambiguous retained binding admitted: %s -> %+v", malformed, value)
+		}
+	}
+}
+
+// Breakage: an unbound or cancelled request performs a native probe. None
+// never composes this port, even when trusted helper bytes are available.
+func TestUnboundPortUnavailable(t *testing.T) {
 	if e := (Port{}).CheckReadiness(context.Background(), Binding{"must-not-open", ""}, 123); e != ErrUnavailable {
 		t.Fatal(e)
 	}

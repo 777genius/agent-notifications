@@ -36,12 +36,24 @@ func TestManagedWriterProtocolProductionDeclarations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, floor := range []int{1, 2, 3, 4} {
+	for _, floor := range []int{1, 2, 3, 4, 5, 6} {
 		if !installruntime.WriterCompatibleAtFloor(data, floor) {
 			t.Fatalf("production CLI bytes fail supported writer floor %d", floor)
 		}
 	}
-	if installruntime.WriterCompatibleAtFloor(data, 5) {
+	v1 := []byte(installruntime.WriterProtocolMarker)
+	v3 := append(append([]byte(nil), v1...), []byte(installruntime.LocalWriterProtocolMarker)...)
+	v4 := append(append([]byte(nil), v1...), []byte(installruntime.OpenCodeWriterProtocolMarker)...)
+	v6 := append(append([]byte(nil), v4...), []byte(installruntime.WindowsWriterProtocolMarker)...)
+	for _, former := range [][]byte{v1, v3, v4} {
+		if installruntime.WriterCompatibleAtFloor(former, 6) {
+			t.Fatalf("former writer admitted to Windows6 floor: %q", former)
+		}
+	}
+	if !installruntime.WriterCompatibleAtFloor(v6, 6) {
+		t.Fatal("Windows6 writer declaration refused")
+	}
+	if installruntime.WriterCompatibleAtFloor(data, 7) {
 		t.Fatal("production CLI granted unknown writer floor")
 	}
 	for _, tc := range []struct {
@@ -49,7 +61,7 @@ func TestManagedWriterProtocolProductionDeclarations(t *testing.T) {
 		want string
 	}{
 		{[]string{"internal-writer-protocol"}, "agent-notifications-managed-writer-protocol-v1\n"},
-		{[]string{"internal-writer-protocol", "--all"}, "agent-notifications-managed-writer-protocol-v1\nagent-notifications-managed-writer-protocol-v3\nagent-notifications-managed-writer-protocol-v4\n"},
+		{[]string{"internal-writer-protocol", "--all"}, "agent-notifications-managed-writer-protocol-v1\nagent-notifications-managed-writer-protocol-v3\nagent-notifications-managed-writer-protocol-v4\nagent-notifications-managed-writer-protocol-v6\n"},
 	} {
 		cmd := exec.CommandContext(ctx, binary, tc.args...)
 		cmd.Env = managedFixture.compilerEnv

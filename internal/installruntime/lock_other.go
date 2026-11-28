@@ -3,6 +3,7 @@
 package installruntime
 
 import (
+	"context"
 	"fmt"
 	"os"
 )
@@ -23,4 +24,11 @@ func openLock(path string, create bool) (*os.File, error) {
 
 func privateDirectory(path string) error {
 	return fmt.Errorf("private managed directory verification unsupported")
+}
+
+func ensureLockDirectory(ctx context.Context, path string, mode os.FileMode) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ensureDir(path, mode)
 }
