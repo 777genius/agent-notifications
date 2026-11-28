@@ -139,24 +139,30 @@ func TestSetupStateRefusesBtrfsSnapshotWithSameInode(t *testing.T) {
 	if out, err := exec.Command(btrfs, "subvolume", "create", original).CombinedOutput(); err != nil {
 		t.Skipf("cannot create btrfs subvolume here: %v %s", err, out)
 	}
-	// TempDir's RemoveAll cannot rmdir a Btrfs subvolume. Register explicit
-	// deletion now; snapshots are registered later and therefore deleted first.
-	t.Cleanup(func() {
-		if out, err := exec.Command(btrfs, "subvolume", "delete", original).CombinedOutput(); err != nil {
-			t.Errorf("delete test Btrfs subvolume: %v %s", err, out)
-		}
-	})
+	// Register cleanup now; snapshots are registered later and therefore
+	// removed first. On developer mounts without user_subvol_rm_allowed the
+	// ioctl-based CLI delete may be denied even for our own test subvolume.
+	cleanup := func(path string) {
+		t.Cleanup(func() {
+			out, err := exec.Command(btrfs, "subvolume", "delete", path).CombinedOutput()
+			if err == nil {
+				return
+			}
+			// Remove only this test-created tree. Ordinary empty-subvolume
+			// rmdir can succeed without the CLI deletion privilege.
+			if removeErr := os.RemoveAll(path); removeErr != nil {
+				t.Errorf("delete test Btrfs subvolume: %v %s; remove tree: %v", err, out, removeErr)
+			}
+		})
+	}
+	cleanup(original)
 	if err = os.MkdirAll(filepath.Join(original, "control", "state"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := exec.Command(btrfs, "subvolume", "snapshot", original, snapshot).CombinedOutput(); err != nil {
 		t.Skipf("cannot snapshot btrfs subvolume here: %v %s", err, out)
 	}
-	t.Cleanup(func() {
-		if out, err := exec.Command(btrfs, "subvolume", "delete", snapshot).CombinedOutput(); err != nil {
-			t.Errorf("delete test Btrfs snapshot: %v %s", err, out)
-		}
-	})
+	cleanup(snapshot)
 	observe := func(dir string) (root, state *os.File, id, volume string) {
 		t.Helper()
 		root, err := openRoot(filepath.Join(dir, "control"))
