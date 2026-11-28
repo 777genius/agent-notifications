@@ -26,8 +26,16 @@ type finalizationRunner struct {
 
 func (r finalizationRunner) Run(ctx context.Context, command ports.Command) (ports.CommandResult, error) {
 	result, err := r.listingRunner.Run(ctx, command)
-	if err == nil && string(result.Stdout) != "[]" {
-		r.afterInstalled()
+	for _, variable := range command.Env {
+		// Only the completed Claude observation authorizes this deliberate
+		// post-activation host fault. Codex native commands now return JSON,
+		// but are not the selected Claude callback boundary.
+		if strings.HasPrefix(variable, "AGENTPLUGINS_CLAUDE_PROFILE=") {
+			if err == nil && string(result.Stdout) != "[]" {
+				r.afterInstalled()
+			}
+			break
+		}
 	}
 	return result, err
 }
