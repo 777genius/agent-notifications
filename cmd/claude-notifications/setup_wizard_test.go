@@ -3350,10 +3350,85 @@ func compileWizardProbe(t *testing.T) (image wizardProbeImage, err error) {
 	if err := os.WriteFile(src, []byte(`package main
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 )
+// Inert fixture discovery; only a registered local source and its actual
+// delivered files can produce positive inventory. No native client is started.
+func codexDiscovery(profile string, entries map[string]map[string]any) {
+	cwd, err := os.Getwd()
+	if err != nil { os.Exit(98) }
+	var selected map[string]any
+	for _, entry := range entries {
+		source, ok := entry["source"].(map[string]any)
+		if !ok || source["source"] != "local" || source["path"] != cwd || entry["enabled"] != true { continue }
+		if selected != nil { os.Exit(98) }
+		selected = entry
+	}
+	if selected == nil { os.Exit(98) }
+	name, nameOK := selected["name"].(string)
+	market, marketOK := selected["marketplaceName"].(string)
+	version, versionOK := selected["version"].(string)
+	id, idOK := selected["pluginId"].(string)
+	if !nameOK || !marketOK || !versionOK || !idOK || name == "" || market == "" || version == "" || id != name+"@"+market { os.Exit(98) }
+	body, err := os.ReadFile(filepath.Join(cwd, "plugin.json"))
+	var manifest struct { Name, Version string }
+	if err != nil || json.Unmarshal(body, &manifest) != nil || manifest.Name != name || manifest.Version != version { os.Exit(98) }
+	skills := []any{}
+	dirs, err := os.ReadDir(filepath.Join(cwd, "skills"))
+	if err != nil && !os.IsNotExist(err) { os.Exit(98) }
+	for _, dir := range dirs {
+		if !dir.IsDir() { continue }
+		skill := filepath.Join(cwd, "skills", dir.Name(), "SKILL.md")
+		info, err := os.Stat(skill)
+		if err != nil || !info.Mode().IsRegular() { os.Exit(98) }
+		skills = append(skills, map[string]any{"name": name+":"+dir.Name(), "scope":"user", "enabled":true, "pluginId":id, "path":filepath.Join(profile,"plugins","cache",market,name,version,"skills",dir.Name(),"SKILL.md")})
+	}
+	var mcp struct { MCPServers map[string]map[string]any }
+	body, err = os.ReadFile(filepath.Join(cwd, ".mcp.json"))
+	if err == nil {
+		if json.Unmarshal(body, &mcp) != nil { os.Exit(98) }
+	} else if !os.IsNotExist(err) { os.Exit(98) }
+	decoder := json.NewDecoder(os.Stdin)
+	encoder := json.NewEncoder(os.Stdout)
+	phase := 0
+	for {
+		var request struct {
+			ID int
+			Method string
+			Params struct { Cwds []string; ForceReload bool; ServerName, Detail string }
+		}
+		if err := decoder.Decode(&request); err != nil {
+			if err == io.EOF && phase == 2 { return }
+			os.Exit(98)
+		}
+		var result any
+		switch request.Method {
+		case "initialize":
+			if phase != 0 || request.ID != 1 { os.Exit(98) }
+			phase = 1
+			result = map[string]any{"userAgent":"agentplugins/0.162.0","codexHome":profile}
+		case "initialized":
+			if phase != 1 || request.ID != 0 { os.Exit(98) }
+			phase = 2
+			continue
+		case "skills/list":
+			if phase != 2 || request.ID != 3 || len(request.Params.Cwds) != 1 || request.Params.Cwds[0] != cwd || !request.Params.ForceReload { os.Exit(98) }
+			result = map[string]any{"data":[]any{map[string]any{"cwd":cwd,"errors":[]any{},"skills":skills}}}
+		case "mcpServerStatus/list":
+			server, ok := mcp.MCPServers[request.Params.ServerName]
+			command, local := server["command"].(string)
+			_, remote := server["url"]
+			if phase != 2 || request.ID < 4 || request.Params.Detail != "toolsAndAuthOnly" || !ok || !local || strings.TrimSpace(command) == "" || remote || server["enabled"] == false || (server["type"] != nil && server["type"] != "stdio") { os.Exit(98) }
+			result = map[string]any{"data":[]any{map[string]any{"name":request.Params.ServerName,"pluginId":id,"authStatus":"unsupported","runtimeStatus":"connected","serverInfo":map[string]any{"name":"inert-"+request.Params.ServerName,"version":"1"},"tools":map[string]any{}}},"nextCursor":nil}
+		default:
+			os.Exit(98)
+		}
+		if encoder.Encode(map[string]any{"id":request.ID,"result":result}) != nil { os.Exit(98) }
+	}
+}
 func codex() {
 	root := os.Getenv("CODEX_HOME")
 	if root == "" { os.Exit(97) }
@@ -3376,6 +3451,7 @@ func codex() {
 		os.Exit(1)
 	}
 	args := os.Args[1:]
+	if len(args) == 1 && args[0] == "app-server" { codexDiscovery(root, registry.Installed); return }
 	switch {
 	case len(args) == 5 && strings.Join(args[:3], " ") == "plugin marketplace add" && args[4] == "--json":
 		body, err := os.ReadFile(filepath.Join(args[3], ".agents", "plugins", "marketplace.json"))
@@ -3528,6 +3604,80 @@ func buildWizardProbe(t *testing.T) string {
 
 // The probe models only the fixture registry, never native Codex evidence.
 // In particular, a missing exact ID must not delete or attest a sibling.
+func TestWizardProbeCodexDiscoveryContract(t *testing.T) {
+	probe := buildWizardProbe(t)
+	profile := t.TempDir()
+	source := t.TempDir()
+	t.Setenv("CODEX_HOME", profile)
+	const market = "agentplugins-discovery"
+	for rel, body := range map[string]string{
+		".agents/plugins/marketplace.json": `{"name":"agentplugins-discovery"}`,
+		".codex-plugin/plugin.json":        `{"name":"agent-notify","version":"1.2.3"}`,
+		"plugin.json":                     `{"name":"agent-notify","version":"1.2.3"}`,
+		"skills/notify/SKILL.md":           "fixture skill",
+		".mcp.json":                       `{"mcpServers":{"notify":{"command":"inert","type":"stdio"}}}`,
+	} {
+		path := filepath.Join(source, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(dir, stdin string, args ...string) ([]byte, error) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, probe, args...)
+		cmd.Dir = dir
+		cmd.Stdin = strings.NewReader(stdin)
+		return cmd.CombinedOutput()
+	}
+	must := func(args ...string) {
+		t.Helper()
+		if body, err := run(source, "", args...); err != nil {
+			t.Fatalf("%v: %s: %v", args, body, err)
+		}
+	}
+	must("plugin", "marketplace", "add", source, "--json")
+	must("plugin", "add", "agent-notify@"+market, "--json")
+	cwd, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The SDK uses canonical paths. Match the registered source as it would.
+	if cwd != source {
+		must("plugin", "marketplace", "add", cwd, "--json")
+		must("plugin", "add", "agent-notify@"+market, "--json")
+	}
+	cwdJSON, err := json.Marshal(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	init := "{\"id\":1,\"method\":\"initialize\"}\n{\"method\":\"initialized\"}\n"
+	skills := "{\"id\":3,\"method\":\"skills/list\",\"params\":{\"cwds\":[" + string(cwdJSON) + "],\"forceReload\":true}}\n"
+	mcp := "{\"id\":4,\"method\":\"mcpServerStatus/list\",\"params\":{\"serverName\":\"notify\",\"detail\":\"toolsAndAuthOnly\"}}\n"
+	body, err := run(cwd, init+skills+mcp, "app-server")
+	if err != nil || !strings.Contains(string(body), "agent-notify:notify") ||
+		!strings.Contains(string(body), "agent-notify@"+market) || !strings.Contains(string(body), "connected") {
+		t.Fatalf("selected fixture discovery: %s: %v", body, err)
+	}
+	for _, input := range []string{
+		init + strings.Replace(mcp, "\"notify\"", "\"foreign\"", 1),
+		init + strings.Replace(skills, string(cwdJSON), "\"foreign\"", 1),
+		init + "{\"id\":7,\"method\":\"thread/start\"}\n",
+	} {
+		if body, err := run(cwd, input, "app-server"); err == nil {
+			t.Fatalf("foreign discovery accepted: %s", body)
+		}
+	}
+	must("plugin", "remove", "agent-notify@"+market, "--json")
+	if body, err := run(cwd, init+skills+mcp, "app-server"); err == nil {
+		t.Fatalf("removed plugin still discovered: %s", body)
+	}
+}
+
 func TestWizardProbeCodexRegistryIsolation(t *testing.T) {
 	probe := buildWizardProbe(t)
 	profile := t.TempDir()
