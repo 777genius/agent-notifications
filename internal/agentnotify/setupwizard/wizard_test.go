@@ -5667,7 +5667,7 @@ func TestWizardUninstallBothWhenOneBindingMissing(t *testing.T) {
 	}
 }
 
-func TestWizardMixedUninstallHoldsClaudeUntilCodexAttested(t *testing.T) {
+func TestWizardMixedNativeCodexRemovalKeepsSiblingAtomicity(t *testing.T) {
 	ctx := testCtx(t)
 	for _, agents := range [][]string{{"claude", "codex"}, {"codex", "claude"}} {
 		t.Run(strings.Join(agents, ","), func(t *testing.T) {
@@ -5705,95 +5705,36 @@ func TestWizardMixedUninstallHoldsClaudeUntilCodexAttested(t *testing.T) {
 			req.Yes = false
 			plan, err := Plan(ctx, req)
 			if err != nil || !plan.Ready {
-				t.Fatalf("uninstall plan: %+v %v", plan, err)
+				t.Fatalf("native mixed uninstall plan: %+v %v", plan, err)
 			}
-			if !strings.Contains(plan.Text, "required=external-uninstall") || !strings.Contains(plan.Text, "required-external-uninstall=codex") {
-				t.Fatalf("mixed uninstall plan omitted Codex prerequisite: %s", plan.Text)
+			if strings.Contains(plan.Text, "required-external-uninstall=") {
+				t.Fatalf("available Codex CLI incorrectly requires manual attestation: %s", plan.Text)
 			}
 			afterPlan, err := installruntime.ReadInstalledSnapshot(control)
 			if err != nil || afterPlan.Ledger.Generation != before.Ledger.Generation || afterPlan.Ledger.PendingMutation != nil {
-				t.Fatalf("mixed uninstall plan mutated ledger: %+v %v", afterPlan.Ledger, err)
+				t.Fatalf("read-only plan mutated ledger: %+v %v", afterPlan.Ledger, err)
 			}
 			req.Yes = true
-			held, err := Run(ctx, req)
-			if err == nil || held.Outcome != "incomplete" || held.Reason != "external_uninstall_required" {
-				t.Fatalf("hold: %+v %v", held, err)
-			}
-			for _, target := range held.Targets {
-				if target.Client == "claude" && target.Unit == "agent-notify" && target.Outcome == "completed" {
-					t.Fatalf("Claude removed before Codex attestation: %+v", held.Targets)
-				}
-			}
-			live := LiveNotifyClients(control, []string{"claude", "codex"})
-			have := strings.Join(live, ",")
-			if len(live) != 2 || !strings.Contains(have, "claude") || !strings.Contains(have, "codex") {
-				t.Fatalf("sibling revoked before Codex attestation: %v", live)
-			}
-			intent, err := portablesetup.ReadIntent(control)
-			if err != nil || intent.ExternalUninstalled {
-				t.Fatalf("hold intent: %+v %v", intent, err)
-			}
-			var sawClaude, sawCodex bool
-			for _, target := range intent.Targets {
-				if target.Client == "claude" {
-					sawClaude = true
-				}
-				if target.Client == "codex" {
-					sawCodex = true
-				}
-			}
-			if !sawClaude || !sawCodex {
-				t.Fatalf("hold dropped a sibling from intent: %+v", intent.Targets)
-			}
-			joined := strings.Join(held.Command, " ")
-			if !strings.Contains(joined, "claude") || !strings.Contains(joined, "codex") || !strings.Contains(joined, "--external-uninstalled") {
-				t.Fatalf("retry omitted mixed uninstall identity: %v", held.Command)
-			}
-			beforeInspect, err := installruntime.ReadInstalledSnapshot(control)
-			if err != nil {
-				t.Fatal(err)
-			}
-			view, err := Run(ctx, Request{
-				Action:      ActionInspect,
-				ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global, Helper: probe,
-			})
-			if err != nil || view.Outcome != "completed" || view.ExitCode() != 0 {
-				t.Fatalf("inspect pending hold: %+v %v", view, err)
-			}
-			foundResume := false
-			for _, next := range view.NextActions {
-				if next.Kind != "external-uninstall" {
-					continue
-				}
-				foundResume = true
-				cmd := strings.Join(next.Command, " ")
-				if !strings.Contains(cmd, "claude") || !strings.Contains(cmd, "codex") || !strings.Contains(cmd, "--external-uninstalled") {
-					t.Fatalf("inspect omitted mixed uninstall resume: %v", next.Command)
-				}
-			}
-			if !foundResume {
-				t.Fatalf("inspect omitted pending uninstall: %+v", view.NextActions)
-			}
-			for _, next := range view.NextActions {
-				if next.Kind == "test-notification" {
-					t.Fatalf("inspect offered delivery while uninstall is pending: %+v", view.NextActions)
-				}
-			}
-			afterInspect, err := installruntime.ReadInstalledSnapshot(control)
-			if err != nil || afterInspect.Ledger.Generation != beforeInspect.Ledger.Generation || afterInspect.Ledger.PendingMutation == nil {
-				t.Fatalf("inspect mutated pending uninstall: %+v %v", afterInspect.Ledger, err)
-			}
-			removed, err := Run(ctx, Request{
-				Action: ActionUninstall, Yes: true, ExternalUninstalled: true,
-				ControlRoot: control, RuntimeRoot: runtime, GlobalConfig: global,
-				ClientExecutable: probe, Helper: probe,
-				ClaudeRunner: listingRunner{configRoot: claudeConfig},
-			})
-			if err != nil || removed.Outcome != "completed" {
-				t.Fatalf("omitted resume attested uninstall: %+v %v", removed, err)
+			removed, err := Run(ctx, req)
+			if err != nil || removed.Outcome != "completed" || !removed.DataRetained {
+				t.Fatalf("native Codex removal did not complete with retained data: %+v %v", removed, err)
 			}
 			if remaining := LiveNotifyClients(control, []string{"claude", "codex"}); len(remaining) != 0 {
-				t.Fatalf("attested uninstall left bindings: %v", remaining)
+				t.Fatalf("native Codex removal left live siblings: %v", remaining)
+			}
+			afterRemove, err := installruntime.ReadInstalledSnapshot(control)
+			if err != nil || afterRemove.Ledger.PendingMutation != nil {
+				t.Fatalf("native mixed removal left incomplete reservation: %+v %v", afterRemove.Ledger, err)
+			}
+			view, err := Run(ctx, Request{Action: ActionInspect, ControlRoot: control,
+				RuntimeRoot: runtime, GlobalConfig: global, Helper: probe})
+			if err != nil || view.Outcome != "completed" || view.ExitCode() != 0 {
+				t.Fatalf("inspect after native removal: %+v %v", view, err)
+			}
+			for _, target := range view.Targets {
+				if target.Unit == "agent-notify" && target.Outcome == "installed" {
+					t.Fatalf("inspect resurrected removed native binding: %+v", view.Targets)
+				}
 			}
 		})
 	}
