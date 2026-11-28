@@ -43,6 +43,17 @@ func serve(root string) {
 	if wd, err := os.Getwd(); err != nil || wd != source { fail() }
 	name, marketplace, ok := strings.Cut(id, "@")
 	if !ok || name != "agent-notify" || marketplace == "" { fail() }
+	// The actual selected package supplies the MCP identity. Do not invent
+	// a passing server when the package contains a different component.
+	var declared map[string]any
+	if json.Unmarshal(read(source, "mcp.json"), &declared) != nil { fail() }
+	servers, ok := declared["mcpServers"].(map[string]any)
+	if !ok || len(servers) != 1 { fail() }
+	serverName := ""
+	for selected := range servers {
+		if selected != "agent-notify" && selected != "agent-notifications" { fail() }
+		serverName = selected
+	}
 	scan := bufio.NewScanner(os.Stdin)
 	scan.Buffer(make([]byte, 4096), 1<<20)
 	out := json.NewEncoder(os.Stdout)
@@ -63,9 +74,9 @@ func serve(root string) {
 				"path":filepath.Join(root,"plugins","cache",marketplace,name,ver,"skills","agent-notifications","SKILL.md")}
 			if out.Encode(map[string]any{"id":3,"result":map[string]any{"data":[]any{map[string]any{"cwd":source,"errors":[]any{},"skills":[]any{skill}}}}}) != nil { fail() }
 		case 3:
-			if row.ID != 4 || row.Method != "mcpServerStatus/list" || row.Params["serverName"] != "agent-notifications" || row.Params["detail"] != "toolsAndAuthOnly" { fail() }
-			mcp := map[string]any{"name":"agent-notifications","pluginId":id,"authStatus":"unsupported","runtimeStatus":"connected",
-				"serverInfo":map[string]any{"name":"agent-notifications","version":ver},"tools":map[string]any{}}
+			if row.ID != 4 || row.Method != "mcpServerStatus/list" || row.Params["serverName"] != serverName || row.Params["detail"] != "toolsAndAuthOnly" { fail() }
+			mcp := map[string]any{"name":serverName,"pluginId":id,"authStatus":"unsupported","runtimeStatus":"connected",
+				"serverInfo":map[string]any{"name":serverName,"version":ver},"tools":map[string]any{}}
 			if out.Encode(map[string]any{"id":4,"result":map[string]any{"data":[]any{mcp},"nextCursor":nil}}) != nil { fail() }
 			return
 		default:
